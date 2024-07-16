@@ -74,8 +74,4 @@ pip install singlecellRL
 
 ## **Reference**
 
-[Zeyu Fu et al. Reinforcement learning guides single-cell sequencing in decoding lineage and cell fate decisions](https://doi.org/10.1101/2024.07.04.602019
-        
-        
-        
-        )
+[Zeyu Fu et al. Reinforcement learning guides single-cell sequencing in decoding lineage and cell fate decisions](https://doi.org/10.1101/2024.07.04.602019)
