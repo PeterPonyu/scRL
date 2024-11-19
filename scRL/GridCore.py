@@ -5,7 +5,7 @@ import seaborn as sns
 import time
 import tqdm
 from joblib import Parallel, delayed
-from scRL.utils import get_dist
+from .utils import get_dist
 
 class Grids_Results():
     """Container for the grid results
@@ -178,8 +178,9 @@ def grids_from_embedding(X,
     
     mapped_grids = check_boundary(n,mapped_grids,mapped_boundary,adj)
     masked_grids = np.array(list(set(i for i in range(len(grids))).difference(mapped_grids)))
-    adj = get_adjacent(n,masked_grids,mapped_grids)
-    G = nx.from_pandas_adjacency(adj)
+    
+    adj = get_adjacent(n, masked_grids, mapped_grids)
+    G = nx.from_numpy_array(adj.values)
     components = len([c for c in nx.connected_components(G)])
     if components > 1:
         print(f'Warning: There are {components} components in the graph, please consider to reduce the parameter "n" or "j".')
@@ -309,21 +310,34 @@ def align_pseudotime(gres,
         else:
             certain_clutser = mapped_grids[np.where(mapped_grids_clusters==early_cluster)[0]]
             start_point = np.random.choice(certain_clutser, n_sample_cells)
-    G = nx.from_pandas_adjacency(gres.grids['mapped_adj'])
+    adj = gres.grids['mapped_adj']
+    G = nx.from_numpy_array(adj.values)
+    G = nx.relabel.relabel_nodes(G, dict(enumerate(adj.columns)), copy=True)
     components = [g for g in nx.connected_components(G)]
+    
     def Dijkstra(G,i):
-        return nx.single_source_dijkstra_path_length(G,i)
+        return nx.single_source_dijkstra_path_length(G, i)
     if len(components) > 1:
         print('Warning: The largest component of the graph is used for pseudo-time aligning')
-        main_c = components[0]
+        
+        pointer = [sum([s in c for s in start_point]) for c in components]
+        main_idx = pointer.index(max(pointer))
+        main_c = components[main_idx]
         main_G = G.subgraph(main_c)
+        
+        start_point = set(start_point) & set(main_G.nodes)
         sampled_time = Parallel(n_jobs=n_jobs)(delayed(Dijkstra)(main_G,i) for i in start_point)
         mean_time = pd.DataFrame(sampled_time).mean()
         con_ls = []
-        for c in components[1:]:
+        comps = components[:main_idx] + components[main_idx+1:]
+        for c in comps:
             con_D = get_dist(grids[list(main_c)], grids[list(c)])
             con_grid = np.where(con_D == con_D.min())
-            con_start = mean_time[list(main_c)[con_grid[0][0]]]
+            try:
+                con_start = mean_time[list(main_c)[con_grid[0][0]]]
+            except Exception as e:
+                con_start = mean_time.max()
+                print(f'An eception occurred: {e} and the maximal time is used.')
             con_ls.append(pd.Series(Dijkstra(G.subgraph(c),list(c)[con_grid[1][0]])) + con_start)
         con_time = pd.concat(con_ls)
         all_time = pd.concat([mean_time, con_time])[mapped_grids]
@@ -391,21 +405,21 @@ def project_back(gres,
         gres.embedding[key] = (val - val.min()) / (val.max() - val.min())
     return
 
-def project_expression(gres,
-                        gene_exp,
-                        neighbors=15
-                       ):
+def project(gres,
+            data,
+            neighbors=15
+           ):
     """
-    This function projects gene expression data from cells onto a grid-based representation.
-    It calculates the weighted sum of the nearest cell expressions for each grid, using a Gaussian kernel to determine the weights.
-    The projected expression data is then stored for further analysis.
+    This function projects data from cells onto a grid-based representation.
+    It calculates the weighted sum of the nearest cell data for each grid, using a Gaussian kernel to determine the weights.
+    The projected data is then stored for further analysis.
     
     Parameters
     ----------
     gres
         Grids results
-    gene_exp
-        Gene expression dataframe [Cell X Gene]
+    Value
+        Dataframe [Cell X Data]
     neighbors
         Nearest cell number to be considered
         (Default: 15)
@@ -414,17 +428,18 @@ def project_expression(gres,
     ----------
     None
     """
-    gres.embedding['gene_exp'] = gene_exp
+    gres.embedding['data'] = data
     X = gres.embedding['embedding']
     grids = gres.grids['grids']
     mapped_grids = gres.grids['mapped_grids']
-    gene_exp = gene_exp.reset_index(drop=True)
+    
+    data = data.reset_index(drop=True)
     grids = grids[mapped_grids]
     D = get_dist(X, grids)
-    idx = gene_exp.index
+    idx = data.index
     min_idx = np.argsort(D, axis=0)[:neighbors]
-    exp = pd.DataFrame(columns=gene_exp.columns)
-    for g in gene_exp.columns:
+    exp = pd.DataFrame(columns=data.columns)
+    for g in data.columns:
         for col in range(min_idx.shape[1]):
             sigma = np.std(D[min_idx[:,col],col])
             D_min = D[min_idx[:,col],col]
@@ -433,6 +448,6 @@ def project_expression(gres,
                 exp.loc[col,g] = 0
             else:
                 weight = weight / weight.sum()
-                exp.loc[col,g] = (weight * np.array(gene_exp.loc[min_idx[:,col],g])).sum()
-    gres.grids['gene_exp'] = exp
+                exp.loc[col,g] = (weight * np.array(data.loc[min_idx[:,col],g])).sum()
+    gres.grids['proj'] = exp
     return

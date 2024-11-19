@@ -20,16 +20,20 @@ The step method is where the action takes place. If the environment has not been
         (Default: 50)
     reward_type
         The reward type generated.
-        (Default: 'lineage')
-        Two types are included:'lineage','gene'.
+        (Default: 'c')
+        Two types are included:'c','d'.
     reward_mode
         The reward mode selected when generating the reward.
         (Default: 'Decision')
         Two modes are included:'Decision','Contribution'.
     """
-    def __init__(self, gres, max_step = 50, reward_type='lineage', reward_mode='Decision'):
+    def __init__(self, gres, max_step = 50, reward_type='c', reward_mode='Decision', starts_probs=True):
         self.rewards_df = gres.qlearning[f'{reward_type}_{reward_mode}_rewards']
         self.mapped_grids = gres.grids['mapped_grids']
+        self.starts_probs = None
+        if starts_probs:
+            self.starts_probs = gres.grids['starts_probs']
+        
         self.starts_grids = gres.grids['starts_cluster_grids']
         self.mapped_boundary = gres.grids['mapped_boundary']
         self.pseudotime = gres.grids['pseudotime']
@@ -38,7 +42,11 @@ The step method is where the action takes place. If the environment has not been
         
         
     def reset(self):
-        state = random.sample(self.starts_grids, 1)[0]
+        if self.starts_probs is not None:
+            state = np.random.choice(self.mapped_grids, 1, p=self.starts_probs).item()
+        else:
+            state = random.sample(self.starts_grids, 1)[0]
+        
         self.state = state
         self.time_step = 0
         self.reset_ = True
@@ -46,6 +54,7 @@ The step method is where the action takes place. If the environment has not been
         return self.state
         
     def step(self, action):
+        
         if not self.reset_:
             print('Warning: reset the environment first!')
             return 
@@ -57,9 +66,9 @@ The step method is where the action takes place. If the environment has not been
         j = idx//50
         direction_lut = dict(zip(df.columns,[(i,j+1),(i+1,j+1),(i+1,j),(i+1,j-1),(i,j-1),(i-1,j-1),(i-1,j),(i-1,j+1)]))
         A = direction_lut[df.columns[action]]
+        
         next_state = A[0] + A[1]*50
         reward = df.loc[idx, df.columns[action]]
-        
         if reward == -1:
             termination = True
             reward = -2
@@ -67,8 +76,11 @@ The step method is where the action takes place. If the environment has not been
         pseudotime_reward = self.pseudotime[next_state] - self.pseudotime[idx]
         reward += pseudotime_reward
         self.state = next_state
+    
+        b_s = set(self.mapped_boundary)
+        s_s = set(self.starts_grids)
         
-        if next_state in set(self.mapped_boundary).difference(set(self.starts_grids)):
+        if next_state in b_s.difference(s_s):
             termination = True
             return self.state, reward, termination, truncation
         

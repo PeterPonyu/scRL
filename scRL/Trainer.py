@@ -1,10 +1,12 @@
 import numpy as np
 import tqdm
-from scRL.EnvironmentCore import deepEnv, replayBuffer
-from scRL.DDQNCore import dqn
-from scRL.ActorCriticCore import actorcritic
-from scRL.TabularQCore import tabularQ, tabularEnv
-from scRL.Simulator.Core import simulator
+from .EnvironmentCore import deepEnv, replayBuffer
+from .DDQNCore import dqn
+from .ActorCriticCore import actorcritic
+from .TabularQCore import tabularQ, tabularEnv
+from .Simulator.Core import simulator
+import torch
+device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
 class trainer:
     """
@@ -19,8 +21,8 @@ class trainer:
         Grids results after all the preprocessings.
     reward_type
         The reward type generated.
-        (Default: 'lineage')
-        Two types are included:'lineage','gene'.
+        (Default: 'c')
+        Two types are included:'c','d'.
     reward_mode
         The reward mode selected when generating the reward.
         (Default: 'Decision')
@@ -77,8 +79,9 @@ class trainer:
     def __init__(self,
                  algo,
                  gres,
-                 reward_type = 'lineage',
+                 reward_type = 'c',
                  reward_mode = 'Decision',
+                 starts_prob = True,
                  X_latent = None,
                  hidden_dim = 128,
                  num_episodes=10000,
@@ -88,7 +91,7 @@ class trainer:
                  capacity = 10000,
                  soft = True,
                  target_update = 50,
-                 gamma = .8,
+                 gamma = .9,
                  tau = .005,
                  alpha=.5,
                  lr = 1e-3,
@@ -100,7 +103,7 @@ class trainer:
         self.num_episodes = num_episodes
         self.gres = gres
         if algo == 'TabularQ':
-            self.env = tabularEnv(gres, max_step, reward_type, reward_mode)
+            self.env = tabularEnv(gres, max_step, reward_type, reward_mode, starts_prob)
             self.agent = tabularQ(self.env, alpha, gamma, 8)
         else:
             if X_latent is not None:
@@ -108,7 +111,7 @@ class trainer:
                 state_dim = X_latent.shape[1]
                 self.state_dim = state_dim
                 self.hidden_dim = hidden_dim
-                self.env = deepEnv(gres, X_latent, max_step, KNN, reward_type, reward_mode)
+                self.env = deepEnv(gres, X_latent, max_step, KNN, reward_type, reward_mode, starts_prob)
                 if algo == 'DDQN':
                     self.batch_size = batch_size
                     self.capacity = capacity
@@ -139,10 +142,17 @@ class trainer:
                                    self.env,
                                    self.num_episodes
                                   )
+    def eval_fate(self,):
+        key = self.gres.qlearning['reward_key']
+        if self.algo in ['ActorCritic', 'DDQN']:
+            self.gres.grids[f'fate_{key}'] = self.agent.critic(torch.tensor(self.env.state_space.mean(axis=1),device=device)).detach().cpu().numpy().ravel()
+        else:
+            self.gres.grids[f'fate_{key}'] = self.agent.Q.mean(axis=1)
+    
     def train_simulator(self, num_episodes, latent_dim):
         agent = self.agent
         env = self.env
-        exps = self.gres.grids['gene_exp'].values.astype('float')
+        exps = self.gres.grids['proj'].values.astype('float')
         grids = self.gres.grids['grids']
         times = self.gres.grids['pseudotime']
         mapped_grids = self.gres.grids['mapped_grids']
