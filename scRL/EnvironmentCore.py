@@ -4,7 +4,7 @@ import time
 import random
 import tqdm
 from collections import namedtuple, deque
-from scRL.utils import get_dist
+from .utils import get_dist
 
 
 class deepEnv:
@@ -25,26 +25,34 @@ class deepEnv:
         (Default: 10)
     reward_type
         The reward type generated.
-        (Default: 'lineage')
-        Two types are included:'lineage','gene'.
+        (Default: 'c')
+        Two types are included:'c','d'.
     reward_mode
         The reward mode selected when generating the reward.
         (Default: 'Decision')
         Two modes are included:'Decision','Contribution'.
     """
-    def __init__(self, gres, X_pca, max_step = 50, KNN=10, reward_type='lineage', reward_mode='Decision'):
+    def __init__(self, gres, X_pca, max_step = 50, KNN=100, reward_type='c', reward_mode='Decision', starts_probs=True):
         self.N = gres.grids['n']
         self.pseudotime = gres.grids['pseudotime']
         self.rewards_df = gres.qlearning[f'{reward_type}_{reward_mode}_rewards']
         self.mapped_grids = gres.grids['mapped_grids']
+        self.starts_probs = None
+        if starts_probs:
+            self.starts_probs = gres.grids['starts_probs']
+        
         self.starts_grids = gres.grids['starts_cluster_grids']
         self.mapped_boundary = gres.grids['mapped_boundary']
+        
         self.state_space = get_state(gres, X_pca, KNN)
         self.reset_ = False
         self.max_step = max_step
     
     def reset(self):
-        start_idx = random.sample(self.starts_grids, 1)[0]
+        if self.starts_probs is not None:
+            start_idx = np.random.choice(self.mapped_grids, 1, p=self.starts_probs).item()
+        else:
+            start_idx = random.sample(self.starts_grids, 1)[0]
         self.state_idx = start_idx
         start_point = np.where(self.mapped_grids == start_idx)[0][0]
         state = np.mean(self.state_space[start_point, :, :], axis=0)
@@ -69,6 +77,7 @@ class deepEnv:
         next_idx = A[0] + A[1]*self.N 
         self.time_step += 1
         reward = df.loc[idx, df.columns[action]]
+        
         if reward == -1:
             termination = True
             reward = -2
@@ -77,11 +86,16 @@ class deepEnv:
         next_point = np.where(self.mapped_grids == next_idx)[0][0]
         next_state = np.mean(self.state_space[next_point, :, :], axis=0)
         self.state = next_state
-        if next_idx in set(self.mapped_boundary).difference(set(self.starts_grids)):
+        
+        b_s = set(self.mapped_boundary)
+        s_s = set(self.starts_grids) if self.starts_grids else set()
+        
+        if next_idx in b_s.difference(s_s):
             termination = True
             pseudotime_reward = self.pseudotime[next_idx] - self.pseudotime[idx]
-            reward += pseudotime_reward 
+            reward += pseudotime_reward
             return self.state, reward, termination, truncation
+
         if next_idx in self.trajectory:
             termination = True
             reward = -1
@@ -131,12 +145,12 @@ def get_state(gres, X, KNN=10):
     return state_space
 
     
-def lineage_rewards(gres,
-                     starts,
-                     ends,
-                     beta=1,
-                     mode='Decision'
-                    ):
+def d_rewards(gres,
+                 starts,
+                 ends,
+                 beta=1,
+                 mode='Decision'
+                ):
     """
     Function to generate lineage specific reward table for constructing environment
     As grid points may represent distinct states of differentiation,
@@ -172,6 +186,7 @@ def lineage_rewards(gres,
     mat = np.ones((n,n)).ravel()
     mat[masked_grids] = 0
     mat = mat.reshape(n,n,order='F')
+    
     starts_cluster_grids = [list(mapped_grids)[i] 
                             for i in np.hstack([np.where(np.array(mapped_grids_clusters)==c) 
                                                 for c in starts])[0].tolist()]
@@ -215,24 +230,25 @@ def lineage_rewards(gres,
                         raise ValueError('Mode must be one of "Decision" and "Contribution"!')
         pbar.update(1)
     pbar.close()
+    gres.qlearning['reward_key'] = '.'.join(ends)
     gres.grids['ends_cluster_grids'] = ends_cluster_grids
     gres.grids['starts_cluster_grids'] = starts_cluster_grids
-    gres.qlearning[f'lineage_{mode}_rewards'] = df
+    gres.qlearning[f'd_{mode}_rewards'] = df
     gres.qlearning['matrix'] = mat
     end_time = time.time()
     print(f'Time used for generating rewards : {(end_time - start_time):.2f} seconds')
     return 
 
-       
-def gene_rewards(gres,
-                  starts,
-                  reward_keys,
-                  punish_keys=None,
-                  beta=1,
-                  mode='Decision'
-                 ):
+def c_rewards(gres,
+              reward_keys,
+              starts=None,
+              starts_keys=None,
+              punish_keys=None,
+              beta=1,
+              mode='Decision'
+             ):
     """
-    Function to generate genes specific reward table.
+    Function to generate continuous value specific reward table.
     Lineage-specific genes are upregulated during cell differentiation,
     while the early genes as well as other lineage genes are downregulated,
     reflecting the shift in gene expression patterns.
@@ -241,12 +257,14 @@ def gene_rewards(gres,
     ----------
     gres
         Grids results after gene projection
+    reward_keys
+        Rewarded by the specific continuous value
     starts
         Starting grids cluster annotation
-    reward_keys
-        Rewarded by the specific genes
+    starts_keys
+        Starting by sampling from the continuous value
     punish_keys
-        Punished by the specific genes
+        Punished by the continuous value
     beta
         Decay coefficient
         (Default: 1)
@@ -268,16 +286,29 @@ def gene_rewards(gres,
     mat = np.ones((n,n)).ravel()
     mat[masked_grids] = 0
     mat = mat.reshape(n,n,order='F')
-    starts_cluster_grids = [list(mapped_grids)[i] 
-                            for i in np.hstack([np.where(np.array(mapped_grids_clusters)==c) 
-                                                for c in starts])[0].tolist()]
-    reward = gres.grids['gene_exp'][reward_keys].mean(axis=1).values
+
+    reward = gres.grids['proj'][reward_keys].mean(axis=1).values
     reward_gene_time = pseudotime[reward > 0]
     reward_scaled_time = (reward_gene_time - reward_gene_time.min()) / (reward_gene_time.max() - reward_gene_time.min())
+    
+    if starts:
+        starts_cluster_grids = [list(mapped_grids)[i] 
+                            for i in np.hstack([np.where(np.array(mapped_grids_clusters)==c) 
+                                                for c in starts])[0].tolist()]
+        gres.grids['starts_cluster_grids'] = starts_cluster_grids
+
+    else:
+        gres.grids['starts_cluster_grids'] = None
+        
+    if starts_keys:
+        starts_probs = gres.grids['proj'][starts_keys].mean(axis=1).values
+        gres.grids['starts_probs'] = (starts_probs / starts_probs.sum()).astype(float)
+    
     if punish_keys:
-        punish = gres.grids['gene_exp'][punish_keys].mean(axis=1).values
+        punish = gres.grids['proj'][punish_keys].mean(axis=1).values
         punish_gene_time = pseudotime[punish > 0]
         punish_scaled_time = (punish_gene_time - punish_gene_time.min()) / (punish_gene_time.max() - punish_gene_time.min())
+        
     df = pd.DataFrame(index=list(mapped_grids),columns=['R','RT','T','LT','L','LB','B','RB'])
     
     pbar = tqdm.tqdm(total=len(df.index), desc='Reward generating')
@@ -330,11 +361,12 @@ def gene_rewards(gres,
                             df.loc[idx,direction] += (1 - np.exp(-beta*reward_scaled_time[next_idx])) * next_reward                 
         pbar.update(1)
     pbar.close()
-    gres.grids['starts_cluster_grids'] = starts_cluster_grids
-    gres.qlearning[f'gene_{mode}_rewards'] = df
+    gres.qlearning['reward_key'] = '.'.join(reward_keys)
+    gres.qlearning[f'c_{mode}_rewards'] = df
     gres.qlearning['matrix'] = mat
     end_time = time.time()
     print(f'Time used for reward generation: {(end_time - start_time):.2f} seconds')    
     return 
+
 
 

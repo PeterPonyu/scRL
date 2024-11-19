@@ -4,13 +4,13 @@ with open("README.md", "r", encoding="utf-8") as fh:
     
 setup(
     name = 'singlecellRL',
-    version = '0.3.0',
+    version = '0.0.5',
     description = 'single cell reinforcement learning',
     long_description = long_description),
     long_description_content_type="text/markdown",
     url = 'https://github.com/PeterPonyu/scRL',
     author = 'Zeyu Fu',
-    author_email = '1119692089@qq.com',
+    author_email = 'fuzeyu99@126.com',
     license = 'MIT',
     packages = find_packages(),
     install_requires = [
