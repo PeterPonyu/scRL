@@ -1,62 +1,10 @@
-# **scRL: deep reinforcement learning in single cell data analysis for fate decision evaluation**
+## **Simple Summary**
 
-Single-cell sequencing effectively delineates the heterogeneous states within cell populations, and pseudotime analysis reconstructs these states' sequential transitions. However, pseudotime often fails to adequately represent intermediate states where critical cell fate decisions are made. To overcome this limitation, we introduce single-cell Reinforcement Learning (scRL), which integrates single-cell grid embedding—an extension of UMAP—with a robust reinforcement learning framework using an actor-critic architecture. This novel approach dynamically simulates differentiation pathways, enhancing our understanding of cell fate decision timing and progression. Using lineage or genetic information-based rewards, the actor network samples potential differentiation trajectories, while the critic network assesses the decision strength. Our results reveal that the strength of fate decisions typically peaks before lineage potential and gene decision strength precedes gene expression, identifying key transitional phases and pre-expression states. Validated through an irradiation-perturbed atlas and a gene perturbation atlas of hematopoietic lineages, scRL offers a nuanced understanding of cellular differentiation, improving our ability to decode and predict cell fate decisions and developmental outcomes.
+Understanding how cells develop into different types during growth and disease is crucial for advancing medicine, but current methods cannot pinpoint exactly when and where cells make these critical decisions. We developed a new artificial intelligence tool called single-cell reinforcement learning that treats cell development like a strategic decision-making game. Just as a chess player learns to make optimal moves, our system learns to identify the precise moments when cells decide their future fate—whether to become blood cells, immune cells or other specialized types. We tested this approach on various biological systems, including normal human blood cell development, cancer cells, mouse organ development and cells responding to radiation damage. Our method consistently outperformed fifteen existing state-of-the-art tools and successfully identified early decision points that occur before cells show obvious signs of commitment to specific lineages. Additionally, we discovered previously unknown regulatory factors that control these decisions. This breakthrough provides scientists with a powerful new way to understand how cells make developmental choices, which could lead to better treatments for diseases like cancer and improved strategies for regenerative medicine. By revealing the hidden decision-making logic of cellular development, this work opens new possibilities for controlling and directing cell fate in therapeutic applications.
 
+## **Abstract**
 
-<img src="docs/_static/Pattern.png" width="600" align="middle"/>
-
-
-## **Model Architecture and Reinforcement Learning Environment**
-
-The scRL model architecture is grounded in the Actor-Critic reinforcement learning framework, which is specifically tailored for the unique environment created by single-cell data. This environment is meticulously constructed through a comprehensive data preprocessing pipeline, providing a structured playground where the reinforcement learning agent can explore and learn effectively.
-
-At the heart of scRL's model is its capability to transform high-dimensional single-cell data into a grid embedding. This embedding, generated using a boundary scanning algorithm, serves as a critical interface between the raw data and the reinforcement learning agent. It not only preserves the essential topological features of the original data but also facilitates efficient exploration and learning by the agent.
-
-Within this environment, the reinforcement learning agent, guided by the Actor-Critic architecture, interacts with the grid embedding to gather information and make informed decisions. The agent receives rewards based on predefined criteria, such as gene expression patterns or lineage commitments, which are designed to encourage the learning of optimal policies for understanding cellular fate determination and differentiation.
-
-## **Workflow Overview**
-
-### 1. **Data Preprocessing and Grid Embedding Generation**:
-
--   **Data Preprocessing**: scRL begins by preprocessing the single-cell data using dimensionality reduction techniques (PCA, UMAP, t-SNE) and clustering algorithms (Leiden, Louvain) to identify subpopulations within the cells.
--   **Grid Embedding Creation**: A specialized grid embedding is then generated using a boundary scanning algorithm. This maps the single-cell data into a manageable 2D space while preserving crucial topological relationships.
-
-### 2. **Projection and Pseudotime Calculation**:
-
--   **Projection**: Both subpopulation information and gene expression data are projected onto this grid embedding, providing a comprehensive context for the reinforcement learning agent.
--   **Pseudotime**: A starting subpopulation, often representing stem or progenitor cells, is selected. The Dijkstra shortest path algorithm is then used to compute pseudotime—a measure of cellular progression—from every grid point to this starting point.
-
-### 3. **Environmental Reward Generation**:
-
--   **Reward Crafting**: Using pseudotime information, scRL designs environmental rewards that guide the reinforcement learning agent. Lineage-specific rewards are tailored based on target lineages' grid regions, while gene-specific rewards utilize projected gene expression data.
--   **Reward Patterns**: Two distinct reward patterns are employed—contributory (increasing with pseudotime) and fate-determining (decreasing with pseudotime)—to provide flexibility in exploring different cellular behaviors.
-
-### 4. **Reinforcement Learning Training and Interaction**:
-
--   **Training**: With a fully established environment and reward system, the Actor-Critic reinforcement learning architecture engages in interactive learning.
--   **Interaction**: The agent explores the grid-embedded environment, making decisions based on policies learned through interactions and feedback from the environment.
--   **Goal**: The primary goal is to maximize cumulative rewards, which indicates a deeper understanding of cellular fate determination and differentiation processes.
-
-## **Functional Modules**
-
-scRL's functionality extends beyond basic reinforcement learning, offering three specialized modules:
-
-### 1. **Gene Functional Module**:
-
--   **Investigation**: Investigates gene expression patterns and potentials, providing insights into genes' roles in cellular differentiation and fate determination.
--   **Valuation**: Outputs gene-specific valuations based on the chosen reward mode, shedding light on their contributory or fate-determining effects.
-
-### 2. **Lineage Functional Module**:
-
--   **Investigation**: Delves into lineage commitments and potentials, revealing the trajectories and decision-making processes involved in cellular differentiation.
--   **Valuation**: Offers lineage-specific valuations, highlighting key lineages and their associated fate determination strengths.
-
-### 3. **Trajectory Functional Module**:
-
--   **Focus**: Concentrates on differentiation trajectories, sampling, and visualizing the paths cells take during their developmental journey.
--   **Simulation**: Utilizes an advanced autoencoder, trained in parallel with the Actor-Critic architecture, to simulate and predict future differentiation steps.
--   **Insights**: Provides a parameterized probability distribution for upcoming changes in cellular states, gene expressions, and trajectory coordinates, offering unparalleled insights into the dynamics of cellular differentiation.
-
+Single-cell RNA sequencing now profiles whole transcriptomes for hundreds of thousands of cells, yet existing trajectory-inference tools rarely pinpoint where and when fate decisions are made. We present single-cell reinforcement learning (scRL), an actor–critic framework that recasts differentiation as a sequential decision process on an interpretable latent manifold derived with Latent Dirichlet Allocation. The critic learns state-value functions that quantify fate intensity for each cell, while the actor traces optimal developmental routes across the manifold. Benchmarks on hematopoiesis, mouse endocrinogenesis, acute myeloid leukemia, and gene-knockout and irradiation datasets show that scRL surpasses fifteen state-of-the-art methods in five independent evaluation dimensions, recovering early decision states that precede overt lineage commitment and revealing regulators such as Dapp1. Beyond fate decisions, the same framework produces competitive measures of lineage-contribution intensity without requiring ground-truth probabilities, providing a unified and extensible approach for decoding developmental logic from single-cell data.
 
 ## **Documentation**
 
@@ -73,5 +21,4 @@ pip install singlecellRL
 ```
 
 ## **Reference**
-
-[Zeyu Fu et al. Reinforcement learning guides single-cell sequencing in decoding lineage and cell fate decisions](https://doi.org/10.1101/2024.07.04.602019)
+[Fu, Z., Chen, C., Wang, S., Wang, J., & Chen, S. (2025). scRL: Utilizing Reinforcement Learning to Evaluate Fate Decisions in Single-Cell Data. Biology, 14(6), 679.] (https://doi.org/10.3390/biology14060679)
