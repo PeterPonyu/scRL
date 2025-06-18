@@ -24,18 +24,3 @@ pip install singlecellRL
 
 **Fu, Z., Chen, C., Wang, S., Wang, J., & Chen, S.** (2025). scRL: Utilizing Reinforcement Learning to Evaluate Fate Decisions in Single-Cell Data. *Biology*, 14(6), 679. https://doi.org/10.3390/biology14060679
 
-### BibTeX
-
-```bibtex  
-@article{fu2025scrl,  
-  title={scRL: Utilizing Reinforcement Learning to Evaluate Fate Decisions in Single-Cell Data},  
-  author={Fu, Zhengqing and Chen, Chao and Wang, Shuai and Wang, Jie and Chen, Shaoliang},  
-  journal={Biology},  
-  volume={14},  
-  number={6},  
-  pages={679},  
-  year={2025},  
-  publisher={MDPI},  
-  doi={10.3390/biology14060679},  
-  url={https://doi.org/10.3390/biology14060679}  
-}  
