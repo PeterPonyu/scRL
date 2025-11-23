@@ -6,7 +6,7 @@ setup(
     name = 'singlecellRL',
     version = '0.0.5',
     description = 'single cell reinforcement learning',
-    long_description = long_description),
+    long_description = long_description,
     long_description_content_type="text/markdown",
     url = 'https://github.com/PeterPonyu/scRL',
     author = 'Zeyu Fu',
