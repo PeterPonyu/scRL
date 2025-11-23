@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 
-device = torch.device('cuda') if torch.cuda.is_available else torch.device('cpu')
+device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
 def weight_init(m):
     if isinstance(m, nn.Linear):

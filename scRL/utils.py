@@ -2,7 +2,7 @@ import numpy as np
 from joblib import Parallel, delayed
 from pygam import LinearGAM, s
 import torch
-device = torch.device('cuda') if torch.cuda.is_available else torch.device('cpu')
+device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
 def get_state_value(gres, trainer, key):
     gres.grids[key] = trainer.agent.critic(torch.tensor(trainer.env.state_space.mean(axis=1),device=device)).detach().cpu().numpy().ravel()
