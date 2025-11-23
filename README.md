@@ -28,10 +28,27 @@
 - PyTorch >= 1.13.1
 - CUDA support (optional, for GPU acceleration)
 
+Core dependencies (automatically installed):
+- anndata >= 0.8.0
+- numpy >= 1.23.5
+- pandas >= 1.5.2
+- scikit-learn >= 1.2.1
+- networkx >= 2.8.8
+- matplotlib >= 3.6.3
+- seaborn >= 0.11.2
+- joblib >= 1.2.0
+- tqdm >= 4.64.1
+- pygam >= 0.8.0
+
 ### Install from PyPI
 
 ```bash
 pip install singlecellRL
+```
+
+**Note**: For the examples in this README, you'll also need Scanpy:
+```bash
+pip install scanpy
 ```
 
 ### Install from Source
