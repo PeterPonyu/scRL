@@ -3,7 +3,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
     
 setup(
-    name = 'singlecellRL',
+    name = 'scrl-fatedecision',
     version = '0.0.6',
     description = 'single cell reinforcement learning',
     long_description = long_description,

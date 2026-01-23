@@ -1,6 +1,6 @@
 # scRL: Single-Cell Reinforcement Learning
 
-[![PyPI](https://img.shields.io/pypi/v/singlecellrl.svg?color=brightgreen&style=flat)](https://pypi.org/project/singlecellrl/)
+[![PyPI](https://img.shields.io/pypi/v/scrl-fatedecision.svg?color=brightgreen&style=flat)](https://pypi.org/project/scrl-fatedecision/)
 [![Documentation Status](https://readthedocs.org/projects/scrl/badge/?version=latest)](https://scrl.readthedocs.io/en/latest/?badge=latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -43,7 +43,7 @@ Core dependencies (automatically installed):
 ### Install from PyPI
 
 ```bash
-pip install singlecellRL
+pip install scrl-fatedecision
 ```
 
 **Note**: For the examples in this README, you'll also need Scanpy:
