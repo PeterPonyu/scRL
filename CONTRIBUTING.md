@@ -39,8 +39,8 @@ If you encounter any bugs or have feature requests, please open an issue on [Git
 
 When adding new functions, please follow our naming conventions:
 
-- **`d_*`** prefix: Functions for discrete/lineage-based analysis (e.g., `d_rewards`)
-- **`c_*`** prefix: Functions for continuous/gene-based analysis (e.g., `c_rewards`)
+- **`d_*`** prefix: Functions for **discrete** features (categorical data like cluster labels, lineage identities). Example: `d_rewards`
+- **`c_*`** prefix: Functions for **continuous** features (numerical data like gene expression values). Example: `c_rewards`
 - Use clear, descriptive names that indicate the function's purpose
 
 ### Backward Compatibility
