@@ -75,6 +75,7 @@ Installation
    :caption: TUTORIALS
 
    notebook/Basics_on_scRL
+   notebook/Contribution_vs_Decision_Example
    notebook/Application1
    notebook/Application2
 
