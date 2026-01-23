@@ -157,8 +157,6 @@ If you use scRL in your research, please cite:
   doi={10.3390/biology14060679}
 }
 ```
-
-**Fu, Z., Chen, C., Wang, S., Wang, J., & Chen, S.** (2025). scRL: Utilizing Reinforcement Learning to Evaluate Fate Decisions in Single-Cell Data. *Biology*, 14(6), 679. https://doi.org/10.3390/biology14060679
         
         
 

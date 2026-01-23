@@ -1,6 +1,6 @@
 # Contributing to scRL
 
-Thank you for your interest in contributing to scRL! We welcome contributions from the community.
+Contributions to scRL are welcome. This document outlines the process for contributing to this project.
 
 ## How to Contribute
 

@@ -65,9 +65,9 @@ scRL's functionality extends beyond basic reinforcement learning, offering three
 Installation
 ------------
 
-.. code-block:: python
+.. code-block:: bash
 
-    pip install singlecellRL
+    pip install scrl-fatedecision
 
 .. toctree::
    :maxdepth: 1
