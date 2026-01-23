@@ -1,7 +1,10 @@
 # scRL: Single-Cell Reinforcement Learning
 
 [![PyPI](https://img.shields.io/pypi/v/scrl-fatedecision.svg?color=brightgreen&style=flat)](https://pypi.org/project/scrl-fatedecision/)
+[![Python Versions](https://img.shields.io/pypi/pyversions/scrl-fatedecision)](https://pypi.org/project/scrl-fatedecision/)
 [![Documentation Status](https://readthedocs.org/projects/scrl/badge/?version=latest)](https://scrl.readthedocs.io/en/latest/?badge=latest)
+[![Publish to PyPI](https://github.com/PeterPonyu/scRL/actions/workflows/publish-pypi.yml/badge.svg)](https://github.com/PeterPonyu/scRL/actions/workflows/publish-pypi.yml)
+[![GitHub Release](https://img.shields.io/github/v/release/PeterPonyu/scRL?sort=semver)](https://github.com/PeterPonyu/scRL/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## Overview
