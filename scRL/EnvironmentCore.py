@@ -287,6 +287,25 @@ def c_rewards(gres,
     mat[masked_grids] = 0
     mat = mat.reshape(n,n,order='F')
 
+    # Validate reward_keys exist in projected data
+    if 'proj' not in gres.grids:
+        raise ValueError(
+            "No projected data found. Please call scRL.project(gres, data) first to project "
+            "gene expression data onto the grid embedding before using c_rewards."
+        )
+    
+    proj_columns = set(gres.grids['proj'].columns)
+    missing_keys = [k for k in reward_keys if k not in proj_columns]
+    if missing_keys:
+        available = list(proj_columns)[:10]  # Show first 10 available columns
+        raise KeyError(
+            f"reward_keys {missing_keys} not found in projected data columns.\n"
+            f"Available columns (first 10): {available}\n\n"
+            f"Note: c_rewards (gene_rewards) expects gene names from projected expression data.\n"
+            f"If you want to use cluster/lineage names for rewards, use d_rewards (lineage_rewards) instead:\n"
+            f"  scRL.d_rewards(gres, starts=['cluster1'], ends=['cluster2'], mode='Contribution')"
+        )
+
     reward = gres.grids['proj'][reward_keys].mean(axis=1).values
     reward_gene_time = pseudotime[reward > 0]
     reward_scaled_time = (reward_gene_time - reward_gene_time.min()) / (reward_gene_time.max() - reward_gene_time.min())

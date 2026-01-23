@@ -6,5 +6,5 @@ EnvironmentCore
     :nosignatures:
     
     scRL.EnvironmentCore.deepEnv
-    scRL.EnvironmentCore.lineage_rewards
-    scRL.EnvironmentCore.gene_rewards
+    scRL.EnvironmentCore.d_rewards
+    scRL.EnvironmentCore.c_rewards

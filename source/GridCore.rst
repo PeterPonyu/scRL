@@ -9,5 +9,4 @@ GridCore
     scRL.GridCore.project_cluster
     scRL.GridCore.align_pseudotime
     scRL.GridCore.project_back
-    scRL.GridCore.project_expression
-    
+    scRL.GridCore.project
