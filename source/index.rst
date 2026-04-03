@@ -69,6 +69,14 @@ Installation
 
     pip install scrl-fatedecision
 
+Citation
+--------
+
+Fu, Z., Chen, C., Wang, S., Wang, J., & Chen, S. (2025).
+scRL: Utilizing Reinforcement Learning to Evaluate Fate Decisions in Single-Cell Data.
+*Biology*, 14(6), 679.
+`doi:10.3390/biology14060679 <https://doi.org/10.3390/biology14060679>`_
+
 .. toctree::
    :maxdepth: 1
    :hidden:
