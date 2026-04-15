@@ -21,7 +21,7 @@
   - **Lineage Module**: Evaluates lineage commitments and differentiation potentials
   - **Trajectory Module**: Simulates and visualizes differentiation pathways
 - **Flexible Reward Systems**: Supports both contribution-based and decision-based reward patterns
-- **State-of-the-Art Performance**: Outperforms 15+ existing trajectory inference methods
+- **Benchmarked Performance**: Compared against 15+ trajectory inference methods across five evaluation dimensions
 
 ## Installation
 
@@ -139,9 +139,8 @@ Understanding how cells develop into different types during growth and disease i
 
 ### Key Findings
 
-- Successfully identifies early decision points before cells show obvious lineage commitment
-- Outperforms 15+ state-of-the-art trajectory inference methods across five evaluation dimensions
-- Reveals previously unknown regulatory factors controlling fate decisions
+- Identifies early decision points before cells show obvious lineage commitment
+- Compared against 15+ trajectory inference methods across five evaluation dimensions
 - Validated on diverse biological systems: hematopoiesis, cancer, organogenesis, and perturbation datasets
 
 ## Citation
