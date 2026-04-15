@@ -1,3 +1,9 @@
+<div align="center">
+  <a href="https://peterponyu.github.io/">
+    <img src="https://peterponyu.github.io/assets/badges/scRL.svg" width="64" alt="ZF Lab · scRL">
+  </a>
+</div>
+
 # scRL: Single-Cell Reinforcement Learning
 
 [![PyPI](https://img.shields.io/pypi/v/scrl-fatedecision.svg?color=brightgreen&style=flat)](https://pypi.org/project/scrl-fatedecision/)
