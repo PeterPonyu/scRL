@@ -1,9 +1,3 @@
-<div align="center">
-  <a href="https://peterponyu.github.io/">
-    <img src="https://peterponyu.github.io/assets/badges/scRL.svg" width="64" alt="ZF Lab · scRL">
-  </a>
-</div>
-
 # scRL: Single-Cell Reinforcement Learning
 
 [![PyPI](https://img.shields.io/pypi/v/scrl-fatedecision.svg?color=brightgreen&style=flat)](https://pypi.org/project/scrl-fatedecision/)
@@ -15,11 +9,11 @@
 
 ## Overview
 
-**scRL** (single-cell Reinforcement Learning) is an advanced computational framework that leverages reinforcement learning to decode cellular fate decisions from single-cell RNA sequencing data. By treating cell differentiation as a sequential decision-making process, scRL identifies the precise timing and location of fate commitments during development and disease.
+**scRL** (single-cell Reinforcement Learning) is a computational framework that applies reinforcement learning to single-cell RNA sequencing data to study cellular fate decisions. By treating cell differentiation as a sequential decision-making process, scRL is designed to help analyze when and where fate commitments emerge during development and disease.
 
 ### Key Features
 
-- **Actor-Critic Architecture**: Employs deep reinforcement learning to model cellular differentiation trajectories
+- **Actor-Critic Architecture**: Uses deep reinforcement learning to model cellular differentiation trajectories
 - **Grid-Based Embedding**: Transforms high-dimensional single-cell data into an interpretable 2D manifold
 - **Fate Decision Detection**: Identifies early decision points that precede overt lineage commitment
 - **Multiple Analysis Modes**:
@@ -27,7 +21,6 @@
   - **Lineage Module**: Evaluates lineage commitments and differentiation potentials
   - **Trajectory Module**: Simulates and visualizes differentiation pathways
 - **Flexible Reward Systems**: Supports both contribution-based and decision-based reward patterns
-- **Benchmarked Performance**: Compared against 15+ trajectory inference methods across five evaluation dimensions
 
 ## Installation
 
@@ -141,13 +134,13 @@ scRL integrates three key components:
 
 ## Scientific Background
 
-Understanding how cells develop into different types during growth and disease is crucial for advancing medicine, but current methods cannot pinpoint exactly when and where cells make these critical decisions. scRL treats cell development like a strategic decision-making game—just as a chess player learns optimal moves, the system identifies precise moments when cells decide their future fate.
+Understanding how cells develop into different types during growth and disease is a central problem in single-cell analysis. scRL frames cell development as a sequential decision-making problem to estimate when cells begin committing to future fates.
 
-### Key Findings
+### Reported Findings
 
 - Identifies early decision points before cells show obvious lineage commitment
-- Compared against 15+ trajectory inference methods across five evaluation dimensions
-- Validated on diverse biological systems: hematopoiesis, cancer, organogenesis, and perturbation datasets
+- Evaluated across hematopoiesis, cancer, organogenesis, and perturbation datasets
+- Includes analyses of regulatory factors associated with fate decisions
 
 ## Citation
 
