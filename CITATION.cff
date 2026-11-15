@@ -1,0 +1,42 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the article in preferred-citation."
+title: "scRL"
+type: software
+authors:
+  - family-names: "Fu"
+    given-names: "Zeyu"
+    orcid: "https://orcid.org/0009-0001-8329-0108"
+  - family-names: "Chen"
+    given-names: "Chunlin"
+    orcid: "https://orcid.org/0009-0006-2328-8774"
+  - family-names: "Wang"
+    given-names: "Song"
+  - family-names: "Wang"
+    given-names: "Junping"
+  - family-names: "Chen"
+    given-names: "Shilei"
+    orcid: "https://orcid.org/0000-0003-3362-2909"
+repository-code: "https://github.com/PeterPonyu/scRL"
+license: MIT
+preferred-citation:
+  type: article
+  title: "scRL: Utilizing Reinforcement Learning to Evaluate Fate Decisions in Single-Cell Data"
+  authors:
+    - family-names: "Fu"
+      given-names: "Zeyu"
+      orcid: "https://orcid.org/0009-0001-8329-0108"
+    - family-names: "Chen"
+      given-names: "Chunlin"
+      orcid: "https://orcid.org/0009-0006-2328-8774"
+    - family-names: "Wang"
+      given-names: "Song"
+    - family-names: "Wang"
+      given-names: "Junping"
+    - family-names: "Chen"
+      given-names: "Shilei"
+      orcid: "https://orcid.org/0000-0003-3362-2909"
+  journal: "Biology"
+  volume: "14"
+  start: "679"
+  year: 2025
+  doi: "10.3390/biology14060679"
