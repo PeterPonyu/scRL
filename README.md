@@ -1,6 +1,7 @@
 # scRL: Single-Cell Reinforcement Learning
 
 [![PyPI](https://img.shields.io/pypi/v/scrl-fatedecision.svg?color=brightgreen&style=flat)](https://pypi.org/project/scrl-fatedecision/)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24271462.svg)](https://doi.org/10.5281/zenodo.24271462)
 [![Python Versions](https://img.shields.io/pypi/pyversions/scrl-fatedecision)](https://pypi.org/project/scrl-fatedecision/)
 [![Documentation Status](https://readthedocs.org/projects/scrl/badge/?version=latest)](https://scrl.readthedocs.io/en/latest/?badge=latest)
 [![Publish to PyPI](https://github.com/PeterPonyu/scRL/actions/workflows/publish-pypi.yml/badge.svg)](https://github.com/PeterPonyu/scRL/actions/workflows/publish-pypi.yml)
@@ -48,9 +49,9 @@ Core dependencies (automatically installed):
 pip install scrl-fatedecision
 ```
 
-**Note**: For the examples in this README, you'll also need Scanpy:
+**Note**: For the examples in this README, you'll also need Scanpy with its Leiden clustering extra:
 ```bash
-pip install scanpy
+pip install "scanpy[leiden]"
 ```
 
 ### Install from Source
@@ -63,6 +64,8 @@ pip install -e .
 
 ## Quick Start
 
+This example follows the [Basics of scRL](https://scrl.readthedocs.io/en/latest/notebook/Basics_on_scRL.html) tutorial. `grids_from_embedding` returns the grid results object `gres`; `project_cluster`, `align_pseudotime`, `d_rewards`, `get_state_value` and `project_back` store their results in `gres` and return `None`.
+
 ```python
 import scRL
 import scanpy as sc
@@ -71,35 +74,48 @@ import scanpy as sc
 adata = sc.datasets.paul15()
 sc.pp.normalize_total(adata, target_sum=1e4)
 sc.pp.log1p(adata)
+sc.pp.scale(adata, max_value=10)
 sc.pp.pca(adata, n_comps=50)
-sc.tl.tsne(adata)
+sc.tl.tsne(adata, perplexity=50)
 sc.pp.neighbors(adata)
 sc.tl.leiden(adata)
 
-# Extract embedding and cluster information
+# 2-D embedding for the grids, cluster labels, and the latent space for the agent
 X = adata.obsm['X_tsne']
 clusters = adata.obs['leiden']
+X_pca = adata.obsm['X_pca']
 
 # Create grid embedding
 gres = scRL.grids_from_embedding(X)
 
 # Project cluster information onto grids
-gres = scRL.project_cluster(gres, clusters)
+scRL.project_cluster(gres, clusters)
 
-# Align pseudotime
-gres = scRL.align_pseudotime(gres, start_cluster='0')
+# Align pseudotime from the starting cluster
+scRL.align_pseudotime(gres, early_cluster='4')
 
-# Train reinforcement learning model
+# Lineage rewards from the starting cluster towards the target clusters
+scRL.d_rewards(gres, starts=['4'], ends=['0', '3', '5'], mode='Decision')
+
+# Train the actor-critic agent on these rewards
 trainer = scRL.trainer(
     algo='ActorCritic',
     gres=gres,
-    reward_type='c',
-    reward_mode='Decision'
+    reward_type='d',
+    reward_mode='Decision',
+    starts_prob=False,
+    X_latent=X_pca,
+    num_episodes=5000
 )
+returns, values = trainer.train()
 
-# Get state values for fate decisions
-scRL.get_state_value(gres, trainer, key='state_value')
+# Fate decision values: critic state values on the grids, projected back to cells
+scRL.get_state_value(gres, trainer, key='decision_value')
+scRL.project_back(gres, 'decision_value')
+adata.obs['decision_value'] = gres.embedding['decision_value']
 ```
+
+The cluster labels come from the tutorial's Leiden clustering, where cluster `'4'` holds the starting cells and `'0'`, `'3'` and `'5'` are the myeloid target clusters. Leiden labels depend on the clustering run, so set `early_cluster`, `starts` and `ends` from the clusters in your own data.
 
 ## Documentation
 
@@ -169,7 +185,7 @@ If you use scRL in your research, please cite:
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License - see the [LICENSE](https://github.com/PeterPonyu/scRL/blob/main/LICENSE) file for details.
 
 ## Contributing
 

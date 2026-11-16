@@ -5,10 +5,16 @@ with open("README.md", "r", encoding="utf-8") as fh:
 setup(
     name = 'scrl-fatedecision',
     version = '0.0.8',
-    description = 'single cell reinforcement learning',
+    description = 'scRL: reinforcement learning to evaluate fate decisions in single-cell data',
     long_description = long_description,
     long_description_content_type="text/markdown",
     url = 'https://github.com/PeterPonyu/scRL',
+    project_urls = {
+        'Documentation': 'https://scrl.readthedocs.io',
+        'Source': 'https://github.com/PeterPonyu/scRL',
+        'Paper': 'https://doi.org/10.3390/biology14060679',
+        'Issues': 'https://github.com/PeterPonyu/scRL/issues',
+    },
     author = 'Zeyu Fu',
     author_email = 'fuzeyu99@126.com',
     license = 'MIT',
