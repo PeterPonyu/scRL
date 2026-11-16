@@ -10,6 +10,12 @@ permissions:
 jobs:
   build-and-publish:
     runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/scrl-fatedecision/
+    permissions:
+      id-token: write  # PyPI trusted publishing
+      contents: read
 
     steps:
       - name: Checkout
@@ -27,7 +33,4 @@ jobs:
         run: python -m build
 
       - name: Publish to PyPI
-        env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
-        run: python -m twine upload dist/*
+        uses: pypa/gh-action-pypi-publish@release/v1
