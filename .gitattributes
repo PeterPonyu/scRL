@@ -1,0 +1,8 @@
+# Zenodo archives each release from GitHub's source zipball, which skips export-ignore paths.
+# The application notebooks carry large embedded outputs and are rendered on Read the Docs;
+# the example data is scanpy's paul15 dataset. They stay in the repository but are left out
+# of the release archive.
+source/notebook/Application1.ipynb export-ignore
+source/notebook/Application2.ipynb export-ignore
+source/notebook/data/** export-ignore
+source/notebook/.virtual_documents/** export-ignore
