@@ -344,15 +344,22 @@ def align_pseudotime_nd(gres, early_cluster, n_sample_cells=10, key_add='pseudot
 
 
 def project_back_nd(gres, key, neighbors=15, w=None, negative=False):
-    """n-D version of ``project_back``: Gaussian kernel over the nearest kept grid points of each cell."""
+    """
+    n-D version of ``project_back``: Gaussian kernel over the nearest kept grid points of each cell. Where the
+    distances to those grid points are (almost) equal, so that the kernel has no width, they get equal weight.
+    """
     X = gres.embedding['embedding']
     points = gres.grids['grids'][gres.grids['mapped_grids']]
     k = min(neighbors, len(points))
     dist, nn = cKDTree(points).query(X, k=k)
     dist, nn = dist.reshape(len(X), k), nn.reshape(len(X), k)
     sigma = dist.std(1, keepdims=True)
-    weight = np.exp(-dist ** 2 / (2 * sigma ** 2))
-    weight = weight / weight.sum(1, keepdims=True)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        weight = np.exp(-dist ** 2 / (2 * sigma ** 2))
+        total = weight.sum(1, keepdims=True)
+        weight = weight / total
+    flat = (sigma == 0) | ~(total > 0)
+    weight = np.where(flat, 1 / k, weight)
     val = (weight * np.asarray(gres.grids[key])[nn]).sum(1)
     if w:
         val = val * np.log(w)

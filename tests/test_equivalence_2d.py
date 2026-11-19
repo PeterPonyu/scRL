@@ -261,3 +261,32 @@ def test_integer_cluster_names(d, scan2d, tree3d):
     for key in ('starts_cluster_grids', 'ends_cluster_grids'):
         assert list(named.grids[key]) == list(listed.grids[key]) and len(listed.grids[key]) > 0
     assert named.qlearning['reward_key'] == listed.qlearning['reward_key'] == '2'
+
+
+def test_project_back_with_equidistant_grid_points():
+    from scRL.GridCore import Grids_Results
+    from scRL.GridNDCore import project_back_nd
+    g = Grids_Results()
+    g.grids['grids'] = np.array([[0., 0.], [0., 1.], [1., 0.], [1., 1.], [5., 5.]])
+    g.grids['mapped_grids'] = np.arange(5)
+    g.grids['neighbors'] = np.zeros((5, 4), int)                     # marks an n-D grid
+    g.grids['v'] = np.array([0., 1., 2., 3., 100.])
+    g.embedding['embedding'] = np.array([[.5, .5], [0., 0.]])
+    project_back_nd(g, 'v', neighbors=4, negative=True)
+    assert np.isfinite(g.embedding['v']).all() and g.embedding['v'][0] == pytest.approx(1.5)
+
+
+def test_project_back_unchanged_on_a_3d_grid(tree3d):
+    from scipy.spatial import cKDTree
+    gres = scRL.grids_from_embedding(tree3d[0])
+    scRL.project_cluster(gres, pd.Series(pd.Categorical(tree3d[1])))
+    seed_all(0); scRL.align_pseudotime(gres, 'root', boundary=False)
+    scRL.project_back(gres, 'pseudotime')
+    X = gres.embedding['embedding']                                    # the kernel as committed before the fix
+    points = gres.grids['grids'][gres.grids['mapped_grids']]
+    dist, nn = cKDTree(points).query(X, k=15)
+    sigma = dist.std(1, keepdims=True)
+    weight = np.exp(-dist ** 2 / (2 * sigma ** 2))
+    weight = weight / weight.sum(1, keepdims=True)
+    val = (weight * np.asarray(gres.grids['pseudotime'])[nn]).sum(1)
+    np.testing.assert_array_equal(gres.embedding['pseudotime'], (val - val.min()) / (val.max() - val.min()))
