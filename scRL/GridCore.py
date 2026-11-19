@@ -6,6 +6,7 @@ import time
 import tqdm
 from joblib import Parallel, delayed
 from .utils import get_dist
+from .GridNDCore import check_embedding, grids_nd
 
 class Grids_Results():
     """Container for the grid results
@@ -33,34 +34,59 @@ class Grids_Results():
         return self._trajectory
 
 def grids_from_embedding(X,
-                          n=50,
+                          n=None,
                           j=3,
-                          n_jobs=8
+                          n_jobs=8,
+                          method='auto',
+                          radius=None,
+                          moves='auto'
                          ):
     """
     Function for generating grids embedding
-    Assuming that most of the two-dimensional embeddings of large scale single-cell data can represent 
-    the generation process and inherent dynamics of the data to some extent, a derivative grids representaion 
+    Assuming that most of the two-dimensional embeddings of large scale single-cell data can represent
+    the generation process and inherent dynamics of the data to some extent, a derivative grids representaion
     of the embedding therefore can provide us with a more simplified and comprehensive perspective of the data space.
-    
+
     Parameters
     ----------
     X
-        A 2-D embedding space
+        An embedding space with 2 to 5 dimensions
     n
-        The grids number for boundary generation
-        (Default: 50)
+        The grids number for boundary generation (scan), or the number of grid points across the widest
+        axis of the data (occupancy)
+        (Default: 50 in 2-D, 30 in 3-D, 16 in 4-D, 12 in 5-D)
     j
-        The observer number for mask generation
+        The observer number for mask generation (scan only)
         (Default: 3)
     n_jobs
-        Number of cores to use
+        Number of cores to use (scan only)
         (Default: 8)
-        
+    method
+        'scan' (the 2-D outline scan), 'occupancy' (grid points kept where the cells are, any dimension)
+        or 'auto' ('scan' for 2-D input, 'occupancy' otherwise)
+        (Default: 'auto')
+    radius
+        Occupancy only: distance in grid steps within which a cell keeps a grid point
+        (Default: 1.0 in 2-D and 3-D, 1.5 in 4-D, 2.0 in 5-D)
+    moves
+        Occupancy only: 'axis', 'full' or 'auto' ('full' in 2-D, 'axis' in 3-D and above)
+        (Default: 'auto')
+
     Returns
     ----------
     Grids results with mapped information
     """
+    X = check_embedding(X)
+    if method == 'auto':
+        method = 'scan' if X.shape[1] == 2 else 'occupancy'
+    if method == 'occupancy':
+        return grids_nd(X, n, radius, moves)
+    if method != 'scan':
+        raise ValueError(f'method must be "auto", "scan" or "occupancy", got {method!r}')
+    if X.shape[1] != 2:
+        raise ValueError('The scan method needs a 2-D embedding; use method="occupancy" for 3-D and above.')
+    if n is None:
+        n = 50
     start = time.time()
     def generate_grids(X=X,n=n):
         right = X[np.argmax(X[:,0]),:]

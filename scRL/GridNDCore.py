@@ -8,10 +8,15 @@ import copy
 import itertools
 
 import numpy as np
-from scipy import sparse
+from scipy import ndimage, sparse
+from scipy.sparse.csgraph import connected_components
+from scipy.spatial import cKDTree
 
 V1_ACTIONS_2D = ['R', 'RT', 'T', 'LT', 'L', 'LB', 'B', 'RB']
 V1_OFFSETS_2D = [(1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1), (0, -1), (1, -1)]
+DEFAULT_N = {2: 50, 3: 30, 4: 16, 5: 12}
+DEFAULT_RADIUS = {2: 1.0, 3: 1.0, 4: 1.5, 5: 2.0}
+MAX_LATTICE_POINTS = 5_000_000
 
 
 def make_offsets(ndim, moves):
@@ -124,3 +129,97 @@ def lattice_from_scan(gres):
 def is_nd(gres):
     """True when the grid carries a neighbour table (built by the n-D code)."""
     return 'neighbors' in gres.grids
+
+
+def check_embedding(X):
+    """Return the embedding as a float array, or raise ValueError when it cannot carry a grid."""
+    X = np.asarray(X)
+    if X.ndim != 2 or not 2 <= X.shape[1] <= 5:
+        raise ValueError(f'The embedding must be a cells x dimensions array with 2 to 5 dimensions, '
+                         f'got shape {X.shape}.')
+    if X.shape[0] < 2:
+        raise ValueError('The embedding must hold at least 2 cells.')
+    if not np.isfinite(X).all():
+        raise ValueError('The embedding contains NaN or infinite values.')
+    if np.ptp(X, axis=0).max() == 0:
+        raise ValueError('All cells have the same coordinates; a grid cannot be laid over them.')
+    return X
+
+
+def grids_nd(X, n=None, radius=None, moves='auto'):
+    """
+    Regular grid over a 2-D to 5-D embedding, kept where the cells are.
+
+    The lattice has equal spacing on every axis. A lattice point is kept when a cell lies within ``radius``
+    grid steps of it; one further layer of points around them forms the rim. Kept points with fewer valid
+    neighbours than the number of moves are boundary points, the others are travel points.
+
+    Parameters
+    ----------
+    X
+        Embedding, cells x dimensions (2 to 5).
+    n
+        Number of grid points across the widest axis of the data.
+        (Default: 50 in 2-D, 30 in 3-D, 16 in 4-D, 12 in 5-D)
+    radius
+        Distance in grid steps within which a cell keeps a grid point; never less than half the diagonal
+        of one grid cell.
+        (Default: 1.0 in 2-D and 3-D, 1.5 in 4-D, 2.0 in 5-D)
+    moves
+        'axis' (one step along one axis) or 'full' (diagonal steps as well); 'auto' is 'full' in 2-D and
+        'axis' in 3-D and above.
+        (Default: 'auto')
+
+    Returns
+    ----------
+    Grids results with mapped information
+    """
+    from .GridCore import Grids_Results
+    X = check_embedding(X)
+    d = X.shape[1]
+    n = DEFAULT_N[d] if n is None else int(n)
+    if n < 2:
+        raise ValueError('n must be at least 2.')
+    radius = DEFAULT_RADIUS[d] if radius is None else float(radius)
+    if moves == 'auto':
+        moves = 'full' if d == 2 else 'axis'
+    lo, hi = X.min(0).astype(float), X.max(0).astype(float)
+    span = hi - lo
+    h = span.max() / (n - 1)
+    r = max(radius, np.sqrt(d) / 2)
+    pad = int(np.ceil(r)) + 1
+    inner = np.ceil(span / h - 1e-9).astype(int) + 1
+    shape = tuple(int(k) for k in inner + 2 * pad)
+    size = int(np.prod(shape, dtype=np.float64))
+    if size > MAX_LATTICE_POINTS:
+        raise ValueError(f'A grid with n={n} would have {size:,} lattice points (limit {MAX_LATTICE_POINTS:,}); '
+                         f'use a smaller n.')
+    origin = lo - ((inner - 1) * h - span) / 2 - pad * h
+    coords = np.indices(shape).reshape(d, -1).T
+    dist, _ = cKDTree((X - origin) / h).query(coords, k=1, distance_upper_bound=r + 1e-9)
+    core = (dist <= r).reshape(shape)
+    structure = ndimage.generate_binary_structure(d, d if d <= 4 else 1)
+    kept = ndimage.binary_dilation(core, structure)
+
+    gres = Grids_Results()
+    gres.embedding['embedding'] = X
+    gres.grids['n'] = n
+    gres.grids['grids'] = origin + coords * h
+    gres.grids['spacing'] = np.full(d, h)
+    gres.grids['origin'] = origin
+    gres.grids['method'] = 'occupancy'
+    gres.grids['radius'] = r
+    gres.grids['mapped_grids'] = np.flatnonzero(kept.ravel())
+    gres.grids['masked_grids'] = np.flatnonzero(~kept.ravel())
+    gres.grids['core'] = core.ravel()[gres.grids['mapped_grids']]
+    attach_lattice(gres, shape, moves)
+
+    M = len(gres.grids['mapped_grids'])
+    parts = connected_components(gres.grids['mapped_adj'], directed=False)[0]
+    print(f'Grid {"x".join(map(str, shape))}: {M} grid points kept, '
+          f'{len(gres.grids["mapped_boundary"]) / M:.0%} boundary, {parts} connected part(s), '
+          f'{len(gres.grids["actions"])} moves')
+    if parts > 1:
+        print(f'Warning: There are {parts} components in the graph, please consider to reduce the parameter "n" '
+              f'or increase "radius".')
+    return gres
