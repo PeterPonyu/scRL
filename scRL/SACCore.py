@@ -97,7 +97,30 @@ class sac:
             s = torch.tensor(np.array(state), dtype=torch.float, device=device)
             return torch.min(self.q1(s), self.q2(s)).max().item()
 
+    def critic_target(self, r, s2, d, alpha):
+        """Target of the Q networks: r + gamma (1 - done) sum_a' pi(a'|s') [min Q_target(s', a') - alpha log pi]."""
+        with torch.no_grad():
+            p2 = self.actor(s2)
+            v2 = (p2 * (torch.min(self.q1_t(s2), self.q2_t(s2)) - alpha * torch.log(p2 + 1e-8))).sum(1, keepdim=True)
+            return r + self.gamma * (1 - d) * v2
+
+    def actor_loss(self, s, alpha):
+        """Actor loss sum_a pi(a|s) [alpha log pi(a|s) - min Q(s, a)], averaged; also returns the entropy."""
+        p = self.actor(s)
+        logp = torch.log(p + 1e-8)
+        q = torch.min(self.q1(s), self.q2(s)).detach()
+        loss = (p * (alpha * logp - q)).sum(1).mean()
+        entropy = -(p.detach() * logp.detach()).sum(1).mean()
+        return loss, entropy
+
+    def alpha_loss(self, entropy):
+        """Temperature loss log(alpha) (entropy - target entropy): alpha grows when the entropy is too low."""
+        return self.log_alpha * (entropy - self.target_entropy)
+
     def update(self, transition_dict):
+        """
+        One update from a batch of transitions; returns the critic target and the three losses that were used.
+        """
         td = transition_dict
         s = torch.tensor(np.array(td['states']), dtype=torch.float, device=device)
         a = torch.tensor(np.array(td['actions']), dtype=torch.int64, device=device).view(-1, 1)
@@ -105,26 +128,21 @@ class sac:
         s2 = torch.tensor(np.array(td['next_states']), dtype=torch.float, device=device)
         d = torch.tensor(np.array(td['dones']), dtype=torch.float, device=device).view(-1, 1)
         alpha = self.log_alpha.exp().detach()
-        with torch.no_grad():
-            p2 = self.actor(s2)
-            v2 = (p2 * (torch.min(self.q1_t(s2), self.q2_t(s2)) - alpha * torch.log(p2 + 1e-8))).sum(1, keepdim=True)
-            y = r + self.gamma * (1 - d) * v2
+        y = self.critic_target(r, s2, d, alpha)
         q_loss = F.mse_loss(self.q1(s).gather(1, a), y) + F.mse_loss(self.q2(s).gather(1, a), y)
         self.q_optimizer.zero_grad()
         q_loss.backward()
         self.q_optimizer.step()
-        p = self.actor(s)
-        logp = torch.log(p + 1e-8)
-        q = torch.min(self.q1(s), self.q2(s)).detach()
-        actor_loss = (p * (alpha * logp - q)).sum(1).mean()
+        actor_loss, entropy = self.actor_loss(s, alpha)
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
         self.actor_optimizer.step()
-        entropy = -(p.detach() * logp.detach()).sum(1).mean()
-        alpha_loss = self.log_alpha * (entropy - self.target_entropy)
+        alpha_loss = self.alpha_loss(entropy)
         self.alpha_optimizer.zero_grad()
         alpha_loss.backward()
         self.alpha_optimizer.step()
         for target, net in ((self.q1_t, self.q1), (self.q2_t, self.q2)):
             for tp, p_ in zip(target.parameters(), net.parameters()):
                 tp.data.copy_((1 - self.tau) * tp.data + self.tau * p_.data)
+        return {'target': y.detach(), 'q_loss': q_loss.detach(), 'actor_loss': actor_loss.detach(),
+                'alpha_loss': alpha_loss.detach(), 'entropy': entropy}

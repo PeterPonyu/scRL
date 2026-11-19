@@ -137,3 +137,37 @@ def test_plot_policy_with_sac(d, scan2d):
     arrows = _arrows(scRL.plot_policy(gres, t, every=1), d == 3)
     assert len(arrows) == len(gres.grids['mapped_travel'])
     np.testing.assert_allclose(arrows, np.tile(expected, (len(arrows), 1)), atol=1e-6)
+
+
+def test_sac_update_terms_by_hand(monkeypatch):
+    import copy
+    agent = _agent(monkeypatch)
+    rng = np.random.default_rng(5)
+    batch = {'states': rng.normal(size=(6, 5)), 'actions': np.array([0, 1, 2, 3, 4, 5]),
+             'rewards': np.array([1., -2., .5, 0., 3., -1.]), 'next_states': rng.normal(size=(6, 5)),
+             'dones': np.array([True, False, False, True, False, False])}
+    before = copy.deepcopy(agent)
+    used = agent.update(batch)
+    s, s2 = torch.tensor(batch['states'], dtype=torch.float), torch.tensor(batch['next_states'], dtype=torch.float)
+    r = torch.tensor(batch['rewards'], dtype=torch.float).view(-1, 1)
+    d = torch.tensor(batch['dones'], dtype=torch.float).view(-1, 1)
+    alpha = before.log_alpha.exp().detach()
+    with torch.no_grad():
+        p2 = before.actor(s2)                                              # policy expectation, not a max
+        q_target = torch.minimum(before.q1_t(s2), before.q2_t(s2))         # target networks, not the online ones
+        v2 = (p2 * (q_target - alpha * torch.log(p2 + 1e-8))).sum(1, keepdim=True)
+        y = r + .9 * (1 - d) * v2                                          # no future after a terminal step
+    torch.testing.assert_close(used['target'], y)
+    assert not torch.allclose(y, r + .9 * v2)
+    with torch.no_grad():
+        p = before.actor(s)
+        logp = torch.log(p + 1e-8)
+        q = torch.minimum(agent.q1(s), agent.q2(s))                        # Q networks after their own step
+        actor_loss = (p * (alpha * logp - q)).sum(1).mean()
+        entropy = -(p * logp).sum(1).mean()
+        alpha_loss = before.log_alpha * (entropy - before.target_entropy)  # sign: alpha grows when entropy is low
+    torch.testing.assert_close(used['actor_loss'], actor_loss)
+    torch.testing.assert_close(used['alpha_loss'], alpha_loss.detach())
+    la = before.log_alpha.detach().clone().requires_grad_(True)
+    (la * (torch.tensor(0.0) - before.target_entropy)).backward()
+    assert la.grad.item() < 0                                              # too little entropy: alpha is raised

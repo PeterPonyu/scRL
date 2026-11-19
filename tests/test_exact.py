@@ -86,3 +86,54 @@ def test_exact_values_keys_and_errors():
     assert gres.grids['mine_move'].shape == V.shape
     with pytest.raises(ValueError, match='d_rewards'):
         scRL.exact_values(gres, reward_mode='Contribution')
+
+
+def _one_step(nb, R, stop, t, p, a):
+    q = nb[p, a]
+    if q < 0:
+        return -2.0, True
+    if stop[q]:
+        return R[p, a] + t[q] - t[p], True
+    return R[p, a], False
+
+
+def _check_environment(gres, env, reward_table):
+    mapped = np.asarray(gres.grids['mapped_grids'])
+    lattice = gres if 'neighbors' in gres.grids else lattice_from_scan(gres)
+    nb = lattice.grids['neighbors']
+    R = gres.qlearning[reward_table].to_numpy(dtype=float)
+    stop = _stop_mask(lattice, gres.grids.get('starts_cluster_grids'))
+    t = gres.grids['pseudotime'].loc[mapped].to_numpy(dtype=float)
+    env.reset()
+    for p in range(len(mapped)):
+        for a in range(nb.shape[1]):
+            env.reset()
+            env.state_idx = mapped[p]
+            env.trajectory = [mapped[p]]
+            env.time_step = 0
+            if hasattr(env, '_p'):
+                env._p, env._visited = p, {mapped[p]}
+            _, reward, done, _ = env.step(a)
+            expected, expected_done = _one_step(nb, R, stop, t, p, a)
+            assert float(reward) == pytest.approx(expected, abs=1e-12) and done == expected_done
+
+
+@pytest.mark.parametrize('rewards', ['lineage', 'gene'])
+def test_one_step_model_equals_the_2d_environment(scan2d, rewards):
+    from scRL.EnvironmentCore import deepEnv
+    Z = make_tree(d=2)[2]
+    if rewards == 'lineage':
+        scRL.d_rewards(scan2d, starts=['root'], ends=['branchA'])
+        table, kw = 'd_Decision_rewards', dict(reward_type='d')
+    else:
+        scRL.c_rewards(scan2d, reward_keys=['geneA'], starts=['root'])
+        table, kw = 'c_Decision_rewards', dict(reward_type='c')
+    env = deepEnv(scan2d, Z, KNN=10, reward_mode='Decision', starts_probs=False, **kw)
+    _check_environment(scan2d, env, table)
+
+
+def test_one_step_model_equals_the_nd_environment():
+    from scRL.EnvironmentNDCore import deepEnvND
+    gres = _small()
+    env = deepEnvND(gres, make_tree(d=3)[2], KNN=10, reward_type='d', reward_mode='Decision', starts_probs=False)
+    _check_environment(gres, env, 'd_Decision_rewards')
