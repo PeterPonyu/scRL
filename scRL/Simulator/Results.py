@@ -31,14 +31,14 @@ def sim_results(gres, n_sample=3000, traj=None, sim_traj=False, prefix=None):
     ----------
     None
     """
-    if gres.embedding['embedding'].shape[1] > 2:
-        raise NotImplementedError('simulation plots are available for 2-D grids only')
     gres.simulating[f'{prefix}_n_sample'] = n_sample
     idx = np.random.randint(0, gres.simulating[f'{prefix}_N'], n_sample)
     gres.simulating[f'{prefix}_sample_idx'] = idx
     df_coord1 = gres.simulating[f'{prefix}_df_coord'].iloc[idx, :]
     df_time1 = gres.simulating[f'{prefix}_df_time'].iloc[idx, :]
     df_type1 = gres.simulating[f'{prefix}_df_type'].iloc[idx, :]
+    if gres.embedding['embedding'].shape[1] >= 3:
+        return _sim_results_3d(gres, df_coord1, df_time1, df_type1, traj, sim_traj, prefix)
     
     with sns.axes_style('white'):
         import os
@@ -139,6 +139,76 @@ def sim_results(gres, n_sample=3000, traj=None, sim_traj=False, prefix=None):
     return
 
 
+def _sim_results_3d(gres, df_coord1, df_time1, df_type1, traj, sim_traj, prefix):
+    """``sim_results`` for 3-D and higher embeddings: the same figures on 3-D axes (first three coordinates)."""
+    import os
+    os.makedirs('sim_output', exist_ok=True)
+    X = gres.embedding['embedding'][:, :3]
+    lut = dict(zip(gres.embedding['clusters'], gres.embedding['cluster_colors']))
+    lineages = gres.simulating[f'{prefix}_lineages']
+    mask = np.asarray(gres.embedding['clusters'].isin(lineages))
+    cols = ['c1', 'c2', 'c3']
+
+    def new_axes():
+        ax = plt.figure(figsize=(5, 5)).add_subplot(projection='3d')
+        ax.set_xticklabels([])
+        ax.set_yticklabels([])
+        ax.set_zticklabels([])
+        return ax
+
+    if traj:
+        from ..Trajectory.Results import traj_results
+        traj_results(gres, lineages, traj)
+    else:
+        ax = new_axes()
+        ax.scatter(*X.T, color='lightgrey', s=4, lw=0)
+        ax.scatter(*X[mask].T, c=gres.embedding['cluster_colors'][mask], s=4, lw=0)
+    plt.savefig('sim_output/lineages.png', dpi=600, bbox_inches='tight')
+
+    ax = new_axes()
+    ax.scatter(*X.T, color='lightgrey', s=4, lw=0)
+    ax.scatter(*X[mask].T, c=np.asarray(gres.embedding['pseudotime'])[mask], cmap='viridis', s=4, lw=0)
+    plt.savefig('sim_output/pseudotime.png', dpi=600, bbox_inches='tight')
+
+    coords = df_coord1[cols].to_numpy()
+    limits = list(zip(coords.min(0), coords.max(0)))
+    if sim_traj:
+        df_coord = gres.simulating[f'{prefix}_df_coord'].copy()
+        df_time = gres.simulating[f'{prefix}_df_time'].copy()
+        df_coord['bins'] = KBinsDiscretizer(df_coord.index.max(), encode='ordinal', strategy='uniform').fit_transform(df_time.values).ravel()
+        df_coord['steps'] = df_coord.index
+        start_num = len(gres.grids['starts_cluster_grids'])
+        sim_traj_df = df_coord[df_coord['bins'] <= df_coord['steps']].groupby('bins').apply(lambda x : x.mean() if x.shape[0] > .2 * start_num else None).dropna()
+        gres.simulating[f'{prefix}_df_traj'] = sim_traj_df
+        path = sim_traj_df[cols].to_numpy()
+        colors = mpl.cm.rainbow(np.linspace(0, 1, len(path)))
+
+    def draw(ax):
+        ax.set_xlim(limits[0])
+        ax.set_ylim(limits[1])
+        ax.set_zlim(limits[2])
+        if sim_traj:
+            for i in range(len(path) - 1):
+                ax.quiver(*path[i], *(path[i + 1] - path[i]), color=colors[i], lw=2, arrow_length_ratio=.3)
+
+    steps = gres.simulating[f'{prefix}_steps']
+    for t in [steps*.2, steps*.4, steps*.6, steps*.8, steps]:
+        idx1 = df_time1.index < t
+        ax = new_axes()
+        ax.scatter(*coords[idx1].T, c=[lut[c] for c in df_type1['Type'][idx1]], s=4, lw=0)
+        draw(ax)
+        plt.savefig(f'sim_output/types_{t}.png', dpi=600, bbox_inches='tight')
+        ax = new_axes()
+        ax.scatter(*coords[idx1].T, c=df_time1['time'][idx1], cmap='viridis', vmax=1, s=4, lw=0)
+        draw(ax)
+        plt.savefig(f'sim_output/time_{t}.png', dpi=600, bbox_inches='tight')
+        types, nums = np.unique(df_type1['Type'][idx1], return_counts=True)
+        plt.figure(figsize=(5, 5))
+        plt.pie(nums, startangle=90, colors=[lut[c] for c in types], wedgeprops={'lw': 0})
+        plt.savefig(f'sim_output/pie_{t}.png', dpi=600, bbox_inches='tight')
+    return
+
+
 def sim_results2(gres, lin1, lin2, prefix=None):
     """
     Plotting funtion for comparing the two lineages correlation.
@@ -160,14 +230,12 @@ def sim_results2(gres, lin1, lin2, prefix=None):
     ----------
     None
     """
-    if gres.embedding['embedding'].shape[1] > 2:
-        raise NotImplementedError('simulation plots are available for 2-D grids only')
     #Save the comparision information 
     gres.simulating[f'{prefix}_lin1'] = lin1
     gres.simulating[f'{prefix}_lin2'] = lin2
     #Embedding pre-setttings
     X_pca = gres.embedding['X_latent']
-    exp = gres.embedding['gene_exp']
+    exp = gres.embedding['gene_exp'] if 'gene_exp' in gres.embedding else gres.embedding['data']
     pseudotime = gres.embedding['pseudotime']
     clusters = gres.embedding['clusters']
     cluster_colors = gres.embedding['cluster_colors']
@@ -266,7 +334,7 @@ def sim_results2(gres, lin1, lin2, prefix=None):
     
     exp_corr_self = np.corrcoef(exp)
     exp_corr_self1 = exp_corr_self[clusters.isin(lin1+lin2),:][:,clusters.isin(lin1+lin2)]
-    sns.clustermap(exp_corr_self1, xticklabels=False,yticklabels=False, col_colors=cols, row_colors=cols
+    sns.clustermap(np.nan_to_num(exp_corr_self1), xticklabels=False,yticklabels=False, col_colors=cols, row_colors=cols
                    , figsize=(5,5), cmap='rainbow', center=0)
     plt.savefig('sim_output/exp_clustermap.png',dpi=600,bbox_inches='tight') 
     
@@ -297,12 +365,10 @@ def sim_results3(gres, top = 10, ma = 11, prefix=None):
     ----------
     None
     """
-    if gres.embedding['embedding'].shape[1] > 2:
-        raise NotImplementedError('simulation plots are available for 2-D grids only')
     #Pre-setttings for plotting
     df_exp = gres.simulating[f'{prefix}_df_exp'].copy()
     df_time = gres.simulating[f'{prefix}_df_time'].copy()
-    exp = gres.embedding['gene_exp']
+    exp = gres.embedding['gene_exp'] if 'gene_exp' in gres.embedding else gres.embedding['data']
     time = gres.embedding['pseudotime']
     clusters = gres.embedding['clusters']
     lineages = gres.simulating[f'{prefix}_lineages']
@@ -320,7 +386,7 @@ def sim_results3(gres, top = 10, ma = 11, prefix=None):
     pos_col = sns.color_palette('RdBu',8)[0]
     neg_col = sns.color_palette('RdBu',8)[-1]
     fig = plt.figure(figsize=(3,5))
-    sns.barplot(x=df_bar['time_corr'], y=g, orient='horizonal',palette='RdBu')
+    sns.barplot(x=df_bar['time_corr'], y=g, orient='h',palette='RdBu')
     ax = plt.gca()
     ax.set_xlabel('')
     ax.set_ylabel('')
@@ -329,14 +395,14 @@ def sim_results3(gres, top = 10, ma = 11, prefix=None):
     ax.spines[['top','right','left']].set_visible(False)
     ax.axvline(0,0,1,color='k')
     for i, t in enumerate(g):
-        ax.text(0, i,t, fontdict={'fontsize':14,'color':pos_col if i < 10 else neg_col
-                                  ,'ha':'right' if i < 10 else 'left','va':'center'})
+        ax.text(0, i,t, fontdict={'fontsize':14,'color':pos_col if i < top else neg_col
+                                  ,'ha':'right' if i < top else 'left','va':'center'})
     plt.savefig('sim_output/sim_genes_corr_bar.png',dpi=600,bbox_inches='tight')
     #Plotting the original genes correlation bar
     exp1 = exp.loc[clusters.isin(lineages)].copy()
     time1 = time[clusters.isin(lineages)]
     fig = plt.figure(figsize=(3,5))
-    sns.barplot(x=np.corrcoef(exp1[g].T, time1.T)[1:,0].astype(np.float16),y=g, orient='horizonal',palette='RdBu')
+    sns.barplot(x=np.corrcoef(exp1[g].T, time1.T)[1:,0].astype(np.float16),y=g, orient='h',palette='RdBu')
     ax = plt.gca()
     ax.set_xlabel('')
     ax.set_ylabel('')
@@ -345,15 +411,15 @@ def sim_results3(gres, top = 10, ma = 11, prefix=None):
     ax.spines[['top','right','left']].set_visible(False)
     ax.axvline(0,0,1,color='k')
     for i, t in enumerate(g):
-        ax.text(0, i,t, fontdict={'fontsize':14,'color':pos_col if i < 10 else neg_col
-                                  ,'ha':'right' if i < 10 else 'left','va':'center'})
+        ax.text(0, i,t, fontdict={'fontsize':14,'color':pos_col if i < top else neg_col
+                                  ,'ha':'right' if i < top else 'left','va':'center'})
     plt.savefig('sim_output/genes_corr_bar.png',dpi=600,bbox_inches='tight')
     df_exp['steps'] = df_exp.index
     df_exp1 = df_exp.groupby('steps').mean()
-    mu1 = df_exp1[g[:10]].T.melt().groupby('steps').mean()['value'].to_numpy()
-    sigma1 = df_exp1[g[:10]].T.melt().groupby('steps').std()['value'].to_numpy()
-    mu2 = df_exp1[g[10:]].T.melt().groupby('steps').mean()['value'].to_numpy()
-    sigma2 = df_exp1[g[10:]].T.melt().groupby('steps').std()['value'].to_numpy()
+    mu1 = df_exp1[g[:top]].T.melt().groupby('steps').mean()['value'].to_numpy()
+    sigma1 = df_exp1[g[:top]].T.melt().groupby('steps').std()['value'].to_numpy()
+    mu2 = df_exp1[g[top:]].T.melt().groupby('steps').mean()['value'].to_numpy()
+    sigma2 = df_exp1[g[top:]].T.melt().groupby('steps').std()['value'].to_numpy()
     with sns.axes_style('darkgrid'):
         fig = plt.figure(figsize=(5, 5))
         plt.plot(mu1,color=pos_col,lw=5)
@@ -366,10 +432,10 @@ def sim_results3(gres, top = 10, ma = 11, prefix=None):
     exp1['bins'] = KBinsDiscretizer(df_exp.index.max(), encode='ordinal', strategy='uniform').fit_transform(time1.reshape(-1,1))
     exp1 = exp1.groupby('bins').mean()
     
-    mu1 = exp1[g[:10]].T.melt().groupby('bins').mean()['value'].to_numpy()
-    sigma1 = exp1[g[:10]].T.melt().groupby('bins').std()['value'].to_numpy()
-    mu2 = exp1[g[10:]].T.melt().groupby('bins').mean()['value'].to_numpy()
-    sigma2 = exp1[g[10:]].T.melt().groupby('bins').std()['value'].to_numpy()
+    mu1 = exp1[g[:top]].T.melt().groupby('bins').mean()['value'].to_numpy()
+    sigma1 = exp1[g[:top]].T.melt().groupby('bins').std()['value'].to_numpy()
+    mu2 = exp1[g[top:]].T.melt().groupby('bins').mean()['value'].to_numpy()
+    sigma2 = exp1[g[top:]].T.melt().groupby('bins').std()['value'].to_numpy()
     if ma:
         from ..utils import moving_average
         mu1 = moving_average(mu1, ma)
