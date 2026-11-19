@@ -22,3 +22,12 @@ GridCore
     scRL.PlotCore.plot_report
     scRL.PlotCore.save_rotation
     scRL.PlotCore.plot_style
+    scRL.PlotCore.plot_fates
+    scRL.PlotCore.plot_conditions
+    scRL.ExactCore.exact_values
+    scRL.FateCore.fate_gate
+    scRL.ConditionCore.project_conditions
+    scRL.ConditionCore.compare_abundance
+    scRL.ConditionCore.condition_grid
+    scRL.ConditionCore.compare_values
+    scRL.ConditionCore.compare_fates

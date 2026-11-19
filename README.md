@@ -141,6 +141,28 @@ In 3-D the agent moves one grid step along one axis at a time, so it has six mov
 
 A complete script on the paul15 data is in `examples/grid3d_paul15.py`.
 
+## Exact solution and lineage gate
+
+The grid environment is small and deterministic, so the best return from every grid point can also be computed exactly, without training and without a random seed. `scRL.exact_values(gres)` stores this value and the best move for the current reward; `scRL.fate_gate` combines one value map per lineage into lineage weights, the heaviest lineage and how undecided each point is, and `scRL.plot_fates` draws them.
+
+```python
+for end in ['0', '3']:
+    scRL.d_rewards(gres, starts=['4'], ends=[end], mode='Decision')
+    scRL.exact_values(gres)
+scRL.fate_gate(gres, ['exact_0', 'exact_3'], names=['lineage 0', 'lineage 3'])
+scRL.plot_fates(gres)
+```
+
+## Comparing conditions
+
+Two conditions are compared on one grid built from all cells. `scRL.project_conditions` counts each condition's cells at every grid point, `scRL.compare_abundance` tests where their numbers differ and reports, per cluster, how many grid points held by one condition only are expected from sampling alone, `scRL.compare_values` compares exact values between the two conditions' maps against a label-shuffling null, and `scRL.plot_conditions` draws the result.
+
+```python
+scRL.project_conditions(gres, adata.obs['condition'])
+scRL.compare_abundance(gres, test='knockout', reference='control')
+scRL.plot_conditions(gres)
+```
+
 ## Documentation
 
 Comprehensive documentation is available at [https://scrl.readthedocs.io](https://scrl.readthedocs.io/en/latest/)

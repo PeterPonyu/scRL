@@ -9,6 +9,7 @@ EnvironmentCore
     scRL.EnvironmentCore.d_rewards
     scRL.EnvironmentCore.c_rewards
     scRL.EnvironmentNDCore.deepEnvND
+    scRL.EnvironmentNDCore.reachability
 
 Utils
 -----

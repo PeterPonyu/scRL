@@ -12,7 +12,8 @@ from .EnvironmentNDCore import reachability
 from .ConditionCore import (project_conditions, compare_abundance, condition_grid, compare_values,
                             compare_fates)
 from .PlotCore import (plot_grids, plot_slices, plot_views, plot_trend, plot_clusters, plot_policy,
-                       plot_training, plot_projections, plot_report, save_rotation, plot_style)
+                       plot_training, plot_projections, plot_report, save_rotation, plot_style, plot_fates,
+                       plot_conditions)
 
 # Backward compatibility aliases for deprecated function names
 lineage_rewards = d_rewards  # Renamed: lineage_rewards -> d_rewards
@@ -28,6 +29,7 @@ __all__ = ['grids_from_embedding', 'align_pseudotime', 'project_cluster', 'proje
            , 'plot_projections', 'plot_report', 'save_rotation', 'plot_style'
            , 'exact_values', 'fate_gate', 'reachability'
            , 'project_conditions', 'compare_abundance', 'condition_grid', 'compare_values', 'compare_fates'
+           , 'plot_fates', 'plot_conditions'
            # Backward compatibility
            , 'lineage_rewards', 'gene_rewards', 'project_expression']
 

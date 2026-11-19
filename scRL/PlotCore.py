@@ -1211,3 +1211,198 @@ def plot_training(returns, values=None, window=100, ax=None):
     twin.plot(np.arange(1, len(v) + 1), v, color='C1', lw=1)
     twin.set_ylabel('Value estimate')
     return ax
+
+
+def _map_axes(fig, rect, three):
+    return fig.add_axes(rect, projection='3d' if three else None)
+
+
+def _draw_map(ax, gres, key, cells, dims, view, three, cmap='plasma', vmin=None, vmax=None, vcenter=None):
+    """One map panel (3-D or flat) drawn through ``plot_grids`` without its own legend or colour bar."""
+    plot_grids(gres, key=key, cells=cells, dims=dims, view=view, ax=ax, cmap=cmap, colorbar=False, vmin=vmin,
+               vmax=vmax, vcenter=vcenter)
+    mappables = [c for c in ax.collections if c.get_array() is not None]
+    return mappables[-1] if mappables else None
+
+
+def _weights(gres, key_add, cells):
+    """Lineage weights (rows: kept grid points or cells) and the lineage names, from ``fate_gate`` or similar."""
+    gate = gres.grids[key_add]
+    names = list(gate.columns)
+    if cells:
+        W = np.column_stack([np.asarray(gres.embedding[f'{key_add}_{n}'], dtype=float) for n in names])
+        clusters = np.asarray(gres.embedding['clusters']) if 'clusters' in gres.embedding else None
+    else:
+        W = gate.to_numpy(dtype=float)
+        clusters = np.asarray(gres.grids['mapped_grids_clusters']) if 'mapped_grids_clusters' in gres.grids else None
+    return W, names, clusters
+
+
+def plot_fates(gres, key_add='gate', cells=False, dims=(0, 1, 2), view=(22, -58)):
+    """
+    Lineage weights on one page: the heaviest lineage, how undecided each point is, and the mean weights per
+    cluster.
+
+    Works with the results of ``fate_gate`` and ``fate_probabilities`` (``key_add`` as given there). Grid
+    points (or cells) without weights are drawn grey.
+
+    Parameters
+    ----------
+    gres
+        Grids results after ``fate_gate`` or ``fate_probabilities``.
+    key_add
+        Prefix of the stored lineage weights.
+        (Default: 'gate')
+    cells
+        Draw the cells instead of the grid points.
+        (Default: False)
+    dims
+        Embedding axes to draw for 3-D and higher grids.
+        (Default: (0, 1, 2))
+    view
+        Elevation and azimuth of the 3-D panels.
+        (Default: (22, -58))
+
+    Returns
+    ----------
+    The matplotlib figure.
+    """
+    if key_add not in gres.grids:
+        raise KeyError(f'No lineage weights under {key_add!r}: call fate_gate or fate_probabilities first.')
+    three = np.asarray(gres.embedding['embedding']).shape[1] > 2
+    W, names, clusters = _weights(gres, key_add, cells)
+    fig = plt.figure(figsize=(15, 4.8))
+    ax1 = _map_axes(fig, [0, .04, .25, .84] if three else [.04, .1, .2, .76], three)
+    _draw_map(ax1, gres, f'{key_add}_top', cells, dims, view, three)
+    ax1.set_title('Heaviest lineage')
+    handles = _legend_handles(gres, _layers(gres, f'{key_add}_top', cells, list(dims) if three else [0, 1],
+                                            False))
+    ax1.legend(handles=handles, loc='center left', bbox_to_anchor=(1, .5), frameon=False, fontsize='small')
+    ax2 = _map_axes(fig, [.36, .04, .25, .84] if three else [.39, .1, .2, .76], three)
+    mappable = _draw_map(ax2, gres, f'{key_add}_entropy', cells, dims, view, three, cmap='viridis', vmin=0, vmax=1)
+    ax2.set_title('How undecided')
+    fig.colorbar(mappable, cax=fig.add_axes([.615, .22, .01, .5], label='<colorbar>'), label='Undecided (0-1)')
+    ax3 = fig.add_axes([.76, .14, .22, .72])
+    if clusters is None:
+        groups, order = np.array(['all'] * len(W)), ['all']
+    else:
+        groups = clusters
+        order = [c for c in _cluster_order(gres) if c in set(groups.tolist())]
+    colors = gres.grids.get(f'{key_add}_top_colors', {})
+    keep = ~np.isnan(W).any(1)
+    means = np.array([W[keep & (groups == c)].mean(0) if (keep & (groups == c)).any() else np.zeros(len(names))
+                      for c in order])
+    left = np.zeros(len(order))
+    y = np.arange(len(order))[::-1]
+    for i, n in enumerate(names):
+        ax3.barh(y, means[:, i], left=left, color=colors.get(n), label=n, height=.8)
+        left += means[:, i]
+    ax3.set_yticks(y, [str(c) for c in order])
+    ax3.set_xlim(0, 1)
+    ax3.set_xlabel('Mean lineage weight')
+    ax3.set_title('Per cluster')
+    ax3.spines[['top', 'right']].set_visible(False)
+    return fig
+
+
+def plot_conditions(gres, dims=(0, 1, 2), view=(22, -58)):
+    """
+    Where two conditions differ in their numbers of cells, on one page (after ``compare_abundance``).
+
+    Panel 1: where each condition is (shared, one condition only, too few cells). Panel 2: the log2 fold change
+    of the test against the reference condition where it was tested; points without a significant
+    difference are drawn faint and small, untested points grey. Panel 3: per cluster, the number of grid
+    points called depleted, enriched or not different. Panel 4: per cluster, the grid points held by one
+    condition only, observed (solid) against the number expected after shuffling the condition labels
+    (hatched).
+
+    Parameters
+    ----------
+    gres
+        Grids results after ``compare_abundance``.
+    dims
+        Embedding axes to draw for 3-D and higher grids.
+        (Default: (0, 1, 2))
+    view
+        Elevation and azimuth of the 3-D panels.
+        (Default: (22, -58))
+
+    Returns
+    ----------
+    The matplotlib figure.
+    """
+    if 'abundance' not in gres.grids:
+        raise ValueError('No abundance comparison on the grid: call compare_abundance first.')
+    three = np.asarray(gres.embedding['embedding']).shape[1] > 2
+    dims = list(dims) if three else [0, 1]
+    test, reference = gres.grids['abundance_test'], gres.grids['abundance_reference']
+    fig = plt.figure(figsize=(13, 10.5))
+
+    ax1 = _map_axes(fig, [0, .53, .36, .42] if three else [.05, .56, .3, .38], three)
+    _draw_map(ax1, gres, 'abundance_class', False, dims, view, three)
+    ax1.set_title('Where each condition is')
+    ax1.legend(handles=_legend_handles(gres, _layers(gres, 'abundance_class', False, dims, False)),
+               loc='center left', bbox_to_anchor=(1, .5), frameon=False, fontsize='small')
+
+    ax2 = _map_axes(fig, [.5, .53, .36, .42] if three else [.53, .56, .3, .38], three)
+    travel = np.asarray(gres.grids['mapped_travel'])
+    coords = np.asarray(gres.grids['grids'])[travel][:, dims]
+    log2fc = _grid_values(gres, 'abundance_log2fc', travel)
+    call = _raw_grid_values(gres, 'abundance_call', travel).astype(str)
+    finite = log2fc[~np.isnan(log2fc)]
+    half = np.abs(finite).max() if len(finite) else 1.0
+    s = 8 if three else 12
+    ax2.scatter(*coords[call == 'too few cells'].T, s=s / 2, lw=0, color=GREY)
+    quiet = call == 'no difference'
+    called = np.isin(call, ['depleted', 'enriched'])
+    ax2.scatter(*coords[quiet].T, s=s / 2, lw=0, c=log2fc[quiet], cmap='RdBu_r', vmin=-half, vmax=half, alpha=.4)
+    mappable = ax2.scatter(*coords[called].T, s=s, lw=0, c=log2fc[called], cmap='RdBu_r', vmin=-half, vmax=half)
+    if three:
+        _style_3d(ax2, dims, view, coords)
+    else:
+        ax2.set_aspect('equal')
+        ax2.set_xticks([])
+        ax2.set_yticks([])
+        ax2.set_xlabel(f'Dim {dims[0] + 1}')
+        ax2.set_ylabel(f'Dim {dims[1] + 1}')
+    ax2.set_title('Change in cell numbers')
+    fig.colorbar(mappable, cax=fig.add_axes([.88, .58, .012, .32], label='<colorbar>'),
+                 label=f'log2 fold change ({test} / {reference})')
+
+    clusters, order = (np.asarray(gres.grids['mapped_grids_clusters']), list(gres.grids['abundance_clusters'].index)) \
+        if 'mapped_grids_clusters' in gres.grids else (np.array(['all'] * len(gres.grids['mapped_grids'])), ['all'])
+    calls = np.asarray(gres.grids['abundance_call']).astype(str)
+    call_colors = gres.grids['abundance_call_colors']
+    y = np.arange(len(order))[::-1]
+    width = max(len(str(c)) for c in order)
+    left_margin = (.25 + .075 * width) / 13
+    ax3 = fig.add_axes([left_margin, .07, .44 - left_margin, .36])
+    left = np.zeros(len(order))
+    for name in ('depleted', 'enriched', 'no difference'):
+        n = np.array([((clusters == c) & (calls == name)).sum() for c in order])
+        ax3.barh(y, n, left=left, color=call_colors[name], label=name, height=.8)
+        left += n
+    ax3.set_yticks(y, [str(c) for c in order])
+    ax3.set_xlabel('Grid points')
+    ax3.set_title('Called per cluster')
+    ax3.legend(frameon=False, fontsize='small', loc='lower right')
+    ax3.spines[['top', 'right']].set_visible(False)
+
+    summary = gres.grids['abundance_clusters']
+    class_colors = gres.grids['abundance_class_colors']
+    ax4 = fig.add_axes([.5 + left_margin, .07, .48 - left_margin, .36])
+    h = .2
+    for j, name in enumerate((reference, test)):
+        label = f'{name} only'
+        observed = summary[label].to_numpy(dtype=float)
+        chance = summary[f'{label} by chance'].to_numpy(dtype=float)
+        base = y + (.3 - j * .4)
+        ax4.barh(base, observed, height=h, color=class_colors[label], label=f'{label}, observed')
+        ax4.barh(base - h, chance, height=h, color='white', edgecolor=class_colors[label], hatch='////',
+                 label=f'{label}, by chance')
+    ax4.set_yticks(y, [str(c) for c in order])
+    ax4.set_xlabel('Grid points held by one condition')
+    ax4.set_title('Observed against label shuffling')
+    ax4.legend(frameon=False, fontsize='small', loc='lower right')
+    ax4.spines[['top', 'right']].set_visible(False)
+    return fig
