@@ -244,3 +244,59 @@ def test_exact_best_mask():
     best = gres.grids['exact_branchA_best']
     assert best.shape == gres.grids['neighbors'].shape and best[np.arange(len(best)), gres.grids['exact_branchA_move']].all()
     assert (best.sum(1) > 1).any()
+
+
+@pytest.mark.parametrize('forward', [1, 5, 10, 20, 40, 80, 200])
+def test_fate_probabilities_stable_or_refused(forward):
+    gres = _gres()
+    try:
+        shares = scRL.fate_probabilities(gres, {'A': 'branchA', 'B': 'branchB'}, forward=forward)
+    except RuntimeError as err:
+        assert 'forward' in str(err)
+        return
+    finite = shares.dropna()
+    np.testing.assert_allclose(finite.sum(1), 1, atol=1e-6)
+    assert finite.to_numpy().min() >= 0 and finite.to_numpy().max() <= 1
+
+
+def test_fate_probabilities_dead_ends_at_strong_bias():
+    gres = _gres()
+    shares = scRL.fate_probabilities(gres, {'A': 'branchA', 'B': 'branchB'}, forward=40)
+    missing = shares.isna().any(axis=1).to_numpy()
+    assert missing.any() and (gres.grids['fate_top'][missing] == 'none').all()
+    nb = gres.grids['neighbors']
+    t = gres.grids['pseudotime'].loc[gres.grids['mapped_grids']].to_numpy()
+    clusters = np.asarray(gres.grids['mapped_grids_clusters'])
+    peak = [p for p in range(len(nb)) if clusters[p] not in ('branchA', 'branchB')
+            and all(t[q] <= t[p] for q in nb[p] if q >= 0)]
+    assert peak and missing[peak].any()
+
+
+def test_tiny_policy_weights_count_as_absent():
+    g = _corridor()
+    right, left = g.grids['actions'].index('x+'), g.grids['actions'].index('x-')
+    weights = np.zeros(g.grids['neighbors'].shape)
+    weights[:, right] = 1
+    weights[:, left] = 1e-20
+    shares = scRL.fate_probabilities(g, {'L': 'left', 'R': 'right'}, policy=weights)
+    np.testing.assert_allclose(shares['R'].to_numpy()[1:], 1)
+    weights[:, right] = 0
+    weights[5, right] = 1e-20
+    weights[:, left] = 1
+    shares = scRL.fate_probabilities(g, {'L': 'left', 'R': 'right'}, policy=weights, key_add='back')
+    assert shares['R'].to_numpy()[5] == 0
+
+
+def test_reserved_lineage_names_and_foreign_trainer(scan2d):
+    gres = _gres()
+    M = len(gres.grids['mapped_grids'])
+    gres.grids['a'], gres.grids['b'] = np.arange(M, dtype=float), -np.arange(M, dtype=float)
+    for name in ('top', 'entropy', 'none'):
+        with pytest.raises(ValueError, match='reserved'):
+            scRL.fate_gate(gres, ['a', 'b'], names=[name, 'x'])
+        with pytest.raises(ValueError, match='reserved'):
+            scRL.fate_probabilities(gres, {name: 'branchA', 'x': 'branchB'})
+    from test_plot import _policy_trainer
+    foreign = _policy_trainer(scan2d, 'ActorCritic', 2)
+    with pytest.raises(ValueError, match='grid'):
+        scRL.fate_probabilities(gres, {'A': 'branchA', 'B': 'branchB'}, policy=foreign)

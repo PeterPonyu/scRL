@@ -1,8 +1,9 @@
 Comparing conditions on one grid
 ================================
 
-Two conditions (for example control and knockout cells) are compared on one grid built from all cells, so that
-grid points, clusters, pseudotime and rewards are the same for both.
+Two conditions (for example control and knockout cells) are compared on one grid built from all cells. The
+lattice and the pseudotime are common to both; each condition's map takes its clusters from its own cells and
+is paid by the same reward rule.
 
 .. code-block:: python
 
@@ -22,7 +23,8 @@ Where the cells are
 and stores the counts as ``gres.grids['condition_counts']``.
 
 ``scRL.compare_abundance`` classes every grid point as shared, held by one condition only, or too sparse to
-tell, and tests where the numbers of cells differ (binomial test across cells, or Welch t-test across samples
+tell, and tests where the numbers of cells differ (a two-sided binomial test across cells, twice the smaller
+tail capped at 1, or a Welch t-test across samples
 when ``samples`` is given, with Benjamini-Hochberg q-values). A grid point held by one condition only is not
 yet a finding: with unequal numbers of cells, sampling alone leaves many sparse grid points with cells of one
 condition only. The table ``gres.grids['abundance_clusters']`` therefore gives, per cluster, the number of such

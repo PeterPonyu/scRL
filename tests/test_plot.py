@@ -720,3 +720,28 @@ def test_slices_legend_margin():
     fig.canvas.draw()
     right = max(t.get_window_extent().x1 for t in fig.legends[0].get_texts())
     assert fig.canvas.get_width_height()[0] - right >= .1 * fig.dpi
+
+
+def test_robust_limits_keep_the_range_when_most_values_are_equal():
+    from matplotlib.colors import to_rgba
+    gres = _gres(3)
+    pos = {g: p for p, g in enumerate(gres.grids['mapped_grids'])}
+    values = np.zeros(len(gres.grids['mapped_grids']))
+    travel = list(gres.grids['mapped_travel'])
+    ones = [pos[g] for g in travel[:5]]
+    values[ones] = 1
+    gres.grids['sparse'] = values
+    ax = scRL.plot_grids(gres, key='sparse')
+    coloured = ax.collections[-1]
+    assert coloured.get_clim() == (0, 1) and coloured.colorbar.extend == 'neither'
+    ax.figure.canvas.draw()
+    colours = np.unique(np.round(coloured.get_facecolors()[:, :3], 6), axis=0)
+    assert len(colours) == 2
+
+
+def test_one_point_trajectory():
+    import matplotlib.pyplot as plt
+    from scRL.Trajectory.Results import _path_3d
+    ax = plt.figure().add_subplot(projection='3d')
+    _path_3d(ax, np.array([[0., 1., 2.]]))
+    assert len(ax.collections) == 1

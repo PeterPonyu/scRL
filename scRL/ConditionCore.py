@@ -119,7 +119,7 @@ def compare_abundance(gres, test, reference, min_cells=3, alpha=.05, samples=Non
     A condition is present at a grid point from ``min_cells`` counted cells; each grid point is classed as
     shared, held by one condition only, or too sparse to tell. Where both conditions together have at least
     ``2 * min_cells`` cells the numbers are compared: without ``samples`` by a two-sided binomial test of the
-    test condition's share against its share of all cells; with ``samples`` by a Welch t-test across the
+    test condition's share against its share of all cells (twice the smaller tail, capped at 1); with ``samples`` by a Welch t-test across the
     samples of the two conditions. Q-values follow Benjamini-Hochberg. Because sampling alone leaves some grid
     points with cells of one condition only, the labels of the two conditions are shuffled over their cells
     ``n_shuffles`` times (sizes kept) and the number of such points expected by chance is reported per cluster.
@@ -437,7 +437,9 @@ def compare_values(gres, test, reference, ends, starts=None, mode='Decision', be
     DataFrame per cluster of the pooled grid (one row 'all' without clusters): ``shared_points``, ``effect``,
     ``relative`` (the effect divided by the spread of the reference map's values, 99th minus 1st percentile
     over its travel points), ``null_sd``, ``z`` (0 where the effect and the null spread are both 0, NaN where
-    only the null spread is 0) and ``pvalue``. Stored on the grid (over the kept points, NaN where undefined):
+    only the null spread is 0), ``pvalue`` (from the shuffles in which the cluster has shared points) and
+    ``shuffles`` (their number; effect, z and p-value are NaN when fewer than half of the shuffles entered).
+    Stored on the grid (over the kept points, NaN where undefined):
     the values on each map ``<key>_<test>`` and ``<key>_<reference>``, ``<key>_effect`` and ``<key>_z``.
     """
     from .EnvironmentNDCore import _as_list, _time_weight
@@ -472,25 +474,34 @@ def compare_values(gres, test, reference, ends, starts=None, mode='Decision', be
     effect = d - mu
     z = _z(effect, sd)
     clusters, order = _cluster_labels(gres)
+    table = _cluster_table(d, null, clusters, order, spread)
+    key = key_add or 'cond_' + '.'.join(map(str, ends))
+    gres.grids[f'{key}_{test}'], gres.grids[f'{key}_{reference}'] = V_t, V_r
+    gres.grids[f'{key}_effect'], gres.grids[f'{key}_z'] = effect, z
+    return table
+
+
+def _cluster_table(d, null, clusters, order, spread):
+    """
+    Per cluster: the median observed difference against the medians of the shuffles in which the cluster has
+    shared points; NaN effect, z and p-value when fewer than half of the shuffles entered.
+    """
+    n_shuffles = len(null)
     rows = []
     for c in order:
         here = clusters == c
         observed = d[here & ~np.isnan(d)]
         medians = np.array([np.median(row[here & ~np.isnan(row)]) for row in null
                             if (here & ~np.isnan(row)).any()])
-        if len(observed) == 0 or len(medians) == 0:
-            rows.append({'shared_points': len(observed), 'effect': np.nan, 'relative': np.nan, 'null_sd': np.nan,
-                         'z': np.nan, 'pvalue': np.nan})
-            continue
-        eff = np.median(observed) - medians.mean()
-        null_sd = medians.std()
-        count = (np.abs(medians - medians.mean()) >= abs(eff)).sum()
-        rows.append({'shared_points': len(observed), 'effect': eff,
-                     'relative': eff / spread if spread > 0 else np.nan, 'null_sd': null_sd,
-                     'z': float(_z(np.array(eff), np.array(null_sd))), 'pvalue': (1 + count) / (n_shuffles + 1)})
-    key = key_add or 'cond_' + '.'.join(map(str, ends))
-    gres.grids[f'{key}_{test}'], gres.grids[f'{key}_{reference}'] = V_t, V_r
-    gres.grids[f'{key}_effect'], gres.grids[f'{key}_z'] = effect, z
+        row = {'shared_points': len(observed), 'effect': np.nan, 'relative': np.nan, 'null_sd': np.nan,
+               'z': np.nan, 'pvalue': np.nan, 'shuffles': len(medians)}
+        if len(observed) and len(medians) and len(medians) >= n_shuffles / 2:
+            eff = np.median(observed) - medians.mean()
+            null_sd = medians.std()
+            count = (np.abs(medians - medians.mean()) >= abs(eff)).sum()
+            row.update(effect=eff, relative=eff / spread if spread > 0 else np.nan, null_sd=null_sd,
+                       z=float(_z(np.array(eff), np.array(null_sd))), pvalue=(1 + count) / (len(medians) + 1))
+        rows.append(row)
     return pd.DataFrame(rows, index=order)
 
 

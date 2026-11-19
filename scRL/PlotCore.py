@@ -186,7 +186,8 @@ def _value_limits(layers, vmin=None, vmax=None, vcenter=None, robust=True):
     """
     Colour limits from the finite values drawn. ``robust``: the 1st and 99th percentiles, except on a side where
     no value lies more than 5% of that range beyond the percentile (there the limit stays at the extreme
-    value, so only real outliers are cut off). Otherwise the range. ``vcenter`` makes the limits symmetric
+    value, so only real outliers are cut off); the full range when the percentiles are less than 1% of it
+    apart (most values equal). Otherwise the range. ``vcenter`` makes the limits symmetric
     about it; explicit limits win.
     """
     finite = _finite(layers)
@@ -195,9 +196,10 @@ def _value_limits(layers, vmin=None, vmax=None, vcenter=None, robust=True):
     lo, hi = finite.min(), finite.max()
     if robust:
         p1, p99 = np.percentile(finite, [1, 99])
-        margin = .05 * (p99 - p1)
-        lo = p1 if lo < p1 - margin else lo
-        hi = p99 if hi > p99 + margin else hi
+        if p99 - p1 >= .01 * (hi - lo):           # else most values are equal: keep the full range
+            margin = .05 * (p99 - p1)
+            lo = p1 if lo < p1 - margin else lo
+            hi = p99 if hi > p99 + margin else hi
     if vcenter is not None:
         half = max(abs(lo - vcenter), abs(hi - vcenter))
         lo, hi = vcenter - half, vcenter + half
@@ -649,8 +651,9 @@ def plot_slices(gres, key=None, axis=2, n_slices=6, cells=False, dims=(0, 1, 2),
         A trained ``scRL.trainer``, or an array of moves (see ``plot_policy``): draw the direction
         the agent tends to move in, averaged over blocks of ``policy_every`` x ``policy_every`` lattice
         positions of the slab (blocks with at least 3 travel points). Each arrow starts at the mean position
-        of its block and is the mean move in the plane, 0.8 block widths long when all moves agree and
-        shorter when they do not (not drawn below 5% of that). Its colour gives the mean move across the slab:
+        of its block and is the mean move in the plane, 0.8 block widths long when all moves agree on one
+        axis move (diagonal moves give proportionally longer arrows) and shorter when they do not (not drawn
+        below 5% of that). Its colour gives the mean move across the slab:
         blue toward lower, red toward higher values of the slicing axis, dark grey within the plane.
         (Default: None)
     policy_every
@@ -1100,8 +1103,8 @@ def plot_policy(gres, trainer, dims=(0, 1, 2), view=(22, -58), ax=None, every=No
     travel points of a regular sub-lattice, as the move in embedding units. On 3-D and higher grids the moves
     are averaged over blocks of ``every`` grid steps along each drawn axis (blocks with at least 3 travel
     points; the other axes are collapsed): each arrow starts at the mean position of its block and is the mean
-    move, 0.8 block widths long when all moves agree and shorter when they do not (not drawn below 5% of
-    that), over small faint grid points coloured by ``key`` (no points when ``key`` is None).
+    move, 0.8 block widths long when all moves agree on one axis move (diagonal moves give proportionally
+    longer arrows) and shorter when they do not (not drawn below 5% of that), over small faint grid points coloured by ``key`` (no points when ``key`` is None).
 
     Parameters
     ----------
@@ -1567,7 +1570,8 @@ def plot_conditions(gres, dims=(0, 1, 2), view=(22, -58)):
     at the 99th percentile of the absolute fold changes (arrows on the colour bar mark larger ones). Panel 3: per cluster, the number of grid
     points called depleted, enriched or not different. Panel 4: per cluster, the grid points held by one
     condition only, observed (solid) against the number expected after shuffling the condition labels
-    (hatched).
+    (hatched). The maps show the travel points; the bar panels count all kept grid points of the abundance
+    table.
 
     Parameters
     ----------
@@ -1589,15 +1593,19 @@ def plot_conditions(gres, dims=(0, 1, 2), view=(22, -58)):
     three = np.asarray(gres.embedding['embedding']).shape[1] > 2
     dims = list(dims) if three else [0, 1]
     test, reference = gres.grids['abundance_test'], gres.grids['abundance_reference']
-    fig = plt.figure(figsize=(13, 9.6))
+    span = np.ptp(np.asarray(gres.grids['grids'])[np.asarray(gres.grids['mapped_travel'])][:, dims], axis=0)
+    top_h = float(np.clip(4.8 * (.5 + .5 * span[-1] / span[:2].max()), 3, 4.8)) if three else 4.6
+    H = 4.5 + top_h + .3                               # the top row follows the height of the 3-D box
+    fig = plt.figure(figsize=(13, H))
+    y_top, h_top = 4.5 / H, top_h / H
 
-    ax1 = _map_axes(fig, [0, .47, .37, .5] if three else [.05, .52, .3, .42], three)
+    ax1 = _map_axes(fig, [0, y_top, .37, h_top] if three else [.05, y_top + .04, .3, h_top - .08], three)
     _draw_map(ax1, gres, 'abundance_class', False, dims, view, three)
     ax1.set_title('Where each condition is')
     ax1.legend(handles=_legend_handles(gres, _layers(gres, 'abundance_class', False, dims, False)),
                loc='center left', bbox_to_anchor=(1, .5), frameon=False, fontsize='small')
 
-    ax2 = _map_axes(fig, [.5, .47, .37, .5] if three else [.53, .52, .3, .42], three)
+    ax2 = _map_axes(fig, [.5, y_top, .37, h_top] if three else [.53, y_top + .04, .3, h_top - .08], three)
     travel = np.asarray(gres.grids['mapped_travel'])
     coords = np.asarray(gres.grids['grids'])[travel][:, dims]
     log2fc = _grid_values(gres, 'abundance_log2fc', travel)
@@ -1606,11 +1614,11 @@ def plot_conditions(gres, dims=(0, 1, 2), view=(22, -58)):
     half = np.percentile(np.abs(finite), 99) if len(finite) else 1.0
     half = half if half > 0 else 1.0
     s = 8 if three else 12
-    ax2.scatter(*coords[call == 'too few cells'].T, s=s / 2, lw=0, color=GREY)
+    _scatter(ax2, coords[call == 'too few cells'], GREY, None, s / 2, None)
     quiet = call == 'no difference'
     called = np.isin(call, ['depleted', 'enriched'])
-    ax2.scatter(*coords[quiet].T, s=s / 2, lw=0, c=log2fc[quiet], cmap='RdBu_r', vmin=-half, vmax=half, alpha=.4)
-    mappable = ax2.scatter(*coords[called].T, s=s, lw=0, c=log2fc[called], cmap='RdBu_r', vmin=-half, vmax=half)
+    _scatter(ax2, coords[quiet], None, log2fc[quiet], s / 2, 'RdBu_r', -half, half, alpha=.4)
+    mappable = _scatter(ax2, coords[called], None, log2fc[called], s, 'RdBu_r', -half, half)
     if three:
         _style_3d(ax2, dims, view, coords)
     else:
@@ -1622,7 +1630,7 @@ def plot_conditions(gres, dims=(0, 1, 2), view=(22, -58)):
     ax2.set_title('Change in cell numbers')
     beyond = np.abs(finite) > half
     extend = _extend([(None, None, finite, None)], -half, half) if beyond.any() else 'neither'
-    fig.colorbar(mappable, cax=fig.add_axes([.89, .585, .012, .275], label='<colorbar>'),
+    fig.colorbar(mappable, cax=fig.add_axes([.89, y_top + .2 * h_top, .012, .55 * h_top], label='<colorbar>'),
                  label=f'log2 fold change ({test} / {reference})', extend=extend)
 
     clusters, order = (np.asarray(gres.grids['mapped_grids_clusters']), list(gres.grids['abundance_clusters'].index)) \
@@ -1632,7 +1640,7 @@ def plot_conditions(gres, dims=(0, 1, 2), view=(22, -58)):
     y = np.arange(len(order))[::-1]
     width = max(len(str(c)) for c in order)
     left_margin = (.45 + .075 * width) / 13
-    ax3 = fig.add_axes([left_margin + .02, .07, .42 - left_margin, .33])
+    ax3 = fig.add_axes([left_margin + .02, .67 / H, .42 - left_margin, 3.17 / H])
     left = np.zeros(len(order))
     for name in ('depleted', 'enriched', 'no difference'):
         n = np.array([((clusters == c) & (calls == name)).sum() for c in order])
@@ -1647,7 +1655,7 @@ def plot_conditions(gres, dims=(0, 1, 2), view=(22, -58)):
 
     summary = gres.grids['abundance_clusters']
     class_colors = gres.grids['abundance_class_colors']
-    ax4 = fig.add_axes([.52 + left_margin, .07, .46 - left_margin, .33])
+    ax4 = fig.add_axes([.52 + left_margin, .67 / H, .46 - left_margin, 3.17 / H])
     h = .2
     for j, name in enumerate((reference, test)):
         label = f'{name} only'

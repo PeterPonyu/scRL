@@ -217,3 +217,19 @@ def test_compare_fates(setup):
     scRL.project_conditions(gres, np.random.default_rng(5).permutation(conditions))
     table = scRL.compare_fates(gres, 'A', 'B', key='lineage', n_permutations=500, n_boot=50)
     assert (table['pvalue'] > .05).all()
+
+
+def test_cluster_pvalue_counts_only_shuffles_that_entered():
+    from scRL.ConditionCore import _cluster_table
+    clusters = np.array(['a'] * 4 + ['b'] * 4)
+    d = np.array([1., 1., 1., 1., .5, .5, .5, .5])
+    null = np.zeros((10, 8))
+    null[:, 4:] = np.nan
+    null[:6, 4:] = np.linspace(-.1, .1, 6)[:, None]
+    null[:, :4] = np.linspace(-.2, .2, 10)[:, None]
+    table = _cluster_table(d, null, clusters, ['a', 'b'], spread=2.0)
+    assert table.loc['a', 'shuffles'] == 10 and table.loc['a', 'pvalue'] == pytest.approx(1 / 11)
+    assert table.loc['b', 'shuffles'] == 6 and table.loc['b', 'pvalue'] == pytest.approx(1 / 7)
+    null[4:, 4:] = np.nan
+    table = _cluster_table(d, null, clusters, ['a', 'b'], spread=2.0)
+    assert table.loc['b', 'shuffles'] == 4 and np.isnan(table.loc['b', ['effect', 'z', 'pvalue']]).all()

@@ -32,6 +32,15 @@ def _summaries(W, names):
     return top, entropy
 
 
+RESERVED = ('top', 'entropy', 'none')
+
+
+def _check_names(names):
+    clash = [n for n in names if str(n) in RESERVED]
+    if clash:
+        raise ValueError(f'Lineage name(s) {clash} are reserved for the stored results; choose other names.')
+
+
 def _store_weights(gres, W, names, key_add):
     """
     Store lineage weights (kept grid points x lineages, NaN rows allowed) on the grid and, brought back with
@@ -104,6 +113,7 @@ def fate_gate(gres, keys, names=None, tau=.1, key_add='gate'):
     names = keys if names is None else [str(n) for n in names]
     if len(names) != len(keys):
         raise ValueError(f'names has {len(names)} entries but there are {len(keys)} keys.')
+    _check_names(names)
     values = np.column_stack([_kept_values(gres, k) for k in keys])
     finite = np.isfinite(values).all(1)
     if finite.sum() < 2:
@@ -126,8 +136,11 @@ def fate_probabilities(gres, ends, forward=1.0, policy=None, key_add='fate'):
     ``forward`` biases the walk toward later pseudotime independently of the pseudotime scale (``forward=0``:
     the unbiased walk). With ``policy`` the move probabilities come from an array or from the actor of a
     trained learner instead. The end points of a lineage (the grid points labelled with its clusters) absorb
-    the walk. Grid points from which no end point can be reached get no shares (NaN), and the walk never
-    steps onto them. Solved exactly with one sparse factorisation.
+    the walk. Moves a million times less likely than the most likely move from a grid point count as
+    impossible. Grid points from which no end point can then be reached get no shares (NaN), and the walk
+    never steps onto them. Solved exactly with one sparse factorisation; the solution is checked (shares in
+    [0, 1], summing to 1) and a ``RuntimeError`` is raised rather than returning shares that fail the check,
+    which can happen when the walk is very strongly biased.
 
     Parameters
     ----------
@@ -159,6 +172,7 @@ def fate_probabilities(gres, ends, forward=1.0, policy=None, key_add='fate'):
     if not isinstance(ends, dict) or len(ends) < 2:
         raise ValueError('ends must be a dict of at least two lineages: name -> cluster name(s).')
     names = [str(n) for n in ends]
+    _check_names(names)
     lineage_clusters = {n: [c] if np.isscalar(c) else list(c) for n, c in zip(names, ends.values())}
     seen = {}
     for n, cs in lineage_clusters.items():
@@ -186,6 +200,10 @@ def fate_probabilities(gres, ends, forward=1.0, policy=None, key_add='fate'):
             w = np.exp(forward * diff / dt)
     else:
         w = _policy_weights(gres, policy, nb)[rows, cols]
+    row_max = np.zeros(M)
+    np.maximum.at(row_max, rows, w)
+    keep = w >= 1e-6 * row_max[rows]
+    rows, q, w = rows[keep], q[keep], w[keep]
     W = sparse.csr_matrix((w, (rows, q)), shape=(M, M))
     reach = owner >= 0
     while True:
@@ -204,6 +222,12 @@ def fate_probabilities(gres, ends, forward=1.0, policy=None, key_add='fate'):
         lu = splu((sparse.eye(free.sum(), format='csc') - P_free).tocsc())
         for i in range(len(names)):
             H[free, i] = lu.solve(np.asarray(P[free][:, owner == i].sum(1)).ravel())
+        solved = H[free]
+        if (np.abs(solved.sum(1) - 1).max() > 1e-6 or solved.min() < -1e-9 or solved.max() > 1 + 1e-9
+                or not np.isfinite(solved).all()):
+            raise RuntimeError('The walk is too strongly biased for a stable solution (some grid points almost '
+                               'never leave each other); use a smaller forward.')
+        H[free] = np.clip(solved, 0, 1)
     return _store_weights(gres, H, names, key_add)
 
 
@@ -221,5 +245,11 @@ def _policy_weights(gres, policy, nb):
     import torch
     net = agent.actor
     device = next(iter(net.parameters())).device if hasattr(net, 'parameters') else None
-    states = torch.tensor(policy.env.state_space.mean(axis=1), dtype=torch.float, device=device)
-    return net(states).detach().cpu().numpy()
+    states = policy.env.state_space.mean(axis=1)
+    if len(states) != len(nb):
+        raise ValueError(f'The trainer was built on a grid of {len(states)} kept points; this grid has {len(nb)}. '
+                         f'Pass a trainer built on this grid.')
+    out = net(torch.tensor(states, dtype=torch.float, device=device)).detach().cpu().numpy()
+    if out.shape != nb.shape:
+        raise ValueError(f'The actor gives {out.shape[1]} moves; this grid has {nb.shape[1]}.')
+    return out
