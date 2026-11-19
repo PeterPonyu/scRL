@@ -31,6 +31,8 @@ def sim_results(gres, n_sample=3000, traj=None, sim_traj=False, prefix=None):
     ----------
     None
     """
+    if gres.embedding['embedding'].shape[1] > 2:
+        raise NotImplementedError('simulation plots are available for 2-D grids only')
     gres.simulating[f'{prefix}_n_sample'] = n_sample
     idx = np.random.randint(0, gres.simulating[f'{prefix}_N'], n_sample)
     gres.simulating[f'{prefix}_sample_idx'] = idx
@@ -158,6 +160,8 @@ def sim_results2(gres, lin1, lin2, prefix=None):
     ----------
     None
     """
+    if gres.embedding['embedding'].shape[1] > 2:
+        raise NotImplementedError('simulation plots are available for 2-D grids only')
     #Save the comparision information 
     gres.simulating[f'{prefix}_lin1'] = lin1
     gres.simulating[f'{prefix}_lin2'] = lin2
@@ -293,6 +297,8 @@ def sim_results3(gres, top = 10, ma = 11, prefix=None):
     ----------
     None
     """
+    if gres.embedding['embedding'].shape[1] > 2:
+        raise NotImplementedError('simulation plots are available for 2-D grids only')
     #Pre-setttings for plotting
     df_exp = gres.simulating[f'{prefix}_df_exp'].copy()
     df_time = gres.simulating[f'{prefix}_df_time'].copy()

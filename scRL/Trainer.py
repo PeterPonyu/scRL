@@ -160,7 +160,7 @@ class trainer:
         grids = self.gres.grids['grids']
         times = self.gres.grids['pseudotime']
         mapped_grids = self.gres.grids['mapped_grids']
-        sim = simulator(self.state_dim, self.hidden_dim, latent_dim, exps.shape[1])
+        sim = simulator(self.state_dim, self.hidden_dim, latent_dim, exps.shape[1], grids.shape[1])
         self.sim = sim
         return_list = []
         v_value_list = []

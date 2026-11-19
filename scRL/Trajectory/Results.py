@@ -29,6 +29,8 @@ def traj_results(gres, lineages, key, points=False, multiple=False):
     clusters = gres.embedding['clusters']
     cluster_colors = gres.embedding['cluster_colors']
     mask = clusters.isin(lineages)
+    if gres.embedding['embedding'].shape[1] >= 3:
+        return _traj_results_3d(gres, np.asarray(mask), key, points, multiple)
     with sns.axes_style('white'):
         if not multiple:
             sns.scatterplot(x=gres.embedding['embedding'][:,0], y=gres.embedding['embedding'][:,1]
@@ -58,3 +60,24 @@ def traj_results(gres, lineages, key, points=False, multiple=False):
                 ax.add_patch(c)
     return
 
+
+def _traj_results_3d(gres, mask, key, points, multiple):
+    """3-D view for ``traj_results``, drawn on the first three axes of the embedding in a new figure."""
+    X = gres.embedding['embedding'][:, :3]
+    ax = plt.figure(figsize=(6, 5)).add_subplot(projection='3d')
+    if not multiple:
+        ax.scatter(*X.T, c='lightgrey', s=4, lw=0)
+        ax.scatter(*X[mask].T, c=gres.embedding['cluster_colors'][mask], s=4, lw=0)
+    if points:
+        grids = gres.grids['grids']
+        for idx in gres.trajectory[key + '_idx']:
+            ax.scatter(*grids[idx, :3].T, c=np.arange(len(idx)), lw=0, cmap='viridis', alpha=.2)
+    else:
+        trajs = gres.trajectory[key + '_traj'][:, :3]
+        colors = mpl.cm.rainbow(np.linspace(0, 1, len(trajs)))
+        for i in range(len(trajs) - 1):
+            ax.plot(*trajs[i:i + 2].T, color=colors[i], lw=2)
+    ax.set_xticklabels([])
+    ax.set_yticklabels([])
+    ax.set_zticklabels([])
+    return

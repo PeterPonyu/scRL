@@ -65,3 +65,31 @@ def test_v1_2d_pipeline_still_runs(scan2d):
     assert len(t.train()[0]) == 100
     scRL.get_state_value(scan2d, t, 'v'); scRL.project_back(scan2d, 'v')
     assert scan2d.embedding['v'].shape == (600,)
+
+
+def test_trajectories_in_3d():
+    gres, Z = _ready(3)
+    scRL.d_rewards(gres, starts=['root'], ends=['branchA'])
+    seed_all(0)
+    t = scRL.trainer('ActorCritic', gres, reward_type='d', starts_prob=False, X_latent=Z, num_episodes=300)
+    t.train()
+    scRL.get_traj_df(gres, t, n=30, key='tr')
+    assert gres.trajectory['tr_traj'].shape[1] == 3
+    scRL.traj_results(gres, ['branchA'], 'tr')
+    scRL.traj_results(gres, ['branchA'], 'tr', points=True)
+
+
+@pytest.mark.parametrize('d', [2, 3])
+def test_simulator_runs(d, scan2d):
+    if d == 2:
+        gres, Z = scan2d, make_tree(d=2)[2]
+    else:
+        gres, Z = _ready(3)
+    scRL.d_rewards(gres, starts=['root'], ends=['branchA'])
+    seed_all(0)
+    t = scRL.trainer('ActorCritic', gres, reward_type='d', starts_prob=False, X_latent=Z, num_episodes=50)
+    t.train()
+    t.train_simulator(50, 8)
+    scRL.get_sim_df(gres, t, lineages=['branchA', 'branchB'], steps=5, prefix='s')
+    assert gres.simulating['s_df_coord'].shape[1] == d
+    assert gres.simulating['s_df_exp'].shape[1] == 3

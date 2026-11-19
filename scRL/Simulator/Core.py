@@ -16,9 +16,9 @@ class encoder(nn.Module):
     """
     The encoder for simulator
     """
-    def __init__(self, state_dim, hidden_dim, latent_dim, gs):
+    def __init__(self, state_dim, hidden_dim, latent_dim, gs, coord_dim=2):
         super().__init__()
-        self.fc1 = nn.Linear(state_dim+gs+3, hidden_dim)
+        self.fc1 = nn.Linear(state_dim+gs+coord_dim+1, hidden_dim)
         self.fc2 = nn.Linear(hidden_dim, hidden_dim)
         self.fc3 = nn.Linear(hidden_dim, latent_dim)
         self.apply(weight_init)
@@ -32,12 +32,12 @@ class decoder(nn.Module):
     """
     The decoder for simulator
     """
-    def __init__(self, latent_dim, hidden_dim, state_dim, gs):
+    def __init__(self, latent_dim, hidden_dim, state_dim, gs, coord_dim=2):
         super().__init__()
         self.fc1 = nn.Linear(latent_dim, hidden_dim)
         self.fc2 = nn.Linear(hidden_dim, hidden_dim)
-        self.fc_mu = nn.Linear(hidden_dim, state_dim+gs+3)
-        self.fc_sigma = nn.Linear(hidden_dim, state_dim+gs+3)
+        self.fc_mu = nn.Linear(hidden_dim, state_dim+gs+coord_dim+1)
+        self.fc_sigma = nn.Linear(hidden_dim, state_dim+gs+coord_dim+1)
         self.apply(weight_init)
         
     def forward(self, x):
@@ -52,9 +52,10 @@ class simulator:
     """
     The simulator architecture
     """
-    def __init__(self, state_dim, hidden_dim, latent_dim, gs):
-        self.encoder = encoder(state_dim, hidden_dim, latent_dim, gs).to(device)
-        self.decoder = decoder(latent_dim, hidden_dim, state_dim, gs).to(device)
+    def __init__(self, state_dim, hidden_dim, latent_dim, gs, coord_dim=2):
+        self.coord_dim = coord_dim
+        self.encoder = encoder(state_dim, hidden_dim, latent_dim, gs, coord_dim).to(device)
+        self.decoder = decoder(latent_dim, hidden_dim, state_dim, gs, coord_dim).to(device)
         self.opt = optim.Adam([{'params':self.encoder.parameters()}
                                ,{'params':self.decoder.parameters()}])
         self.loss_ls = []
@@ -78,9 +79,10 @@ class simulator:
         next_time = torch.tensor(next_time, dtype=torch.float, device=device)
         latent = self.encoder(torch.cat([x, exp, grid, time]))
         pred = self.decoder(latent) 
-        pred1 = pred[:-3-len(exp)]
-        pred2 = pred[-3-len(exp):-3]
-        pred3 = pred[-3:-1]
+        k = self.coord_dim + 1
+        pred1 = pred[:-k-len(exp)]
+        pred2 = pred[-k-len(exp):-k]
+        pred3 = pred[-k:-1]
         pred4 = pred[-1]
         loss = F.smooth_l1_loss(next_x, x+pred1) + F.smooth_l1_loss(next_exp, exp+pred2) + F.smooth_l1_loss(next_grid, grid+pred3) + F.smooth_l1_loss(next_time, time+pred4)
         self.opt.zero_grad()
@@ -130,8 +132,9 @@ def get_sim_df(gres, trainer, lineages=None, steps=50, prefix=None):
         ls.append(df)
 
     df_pc = pd.concat(ls)
-    df_exp = pd.concat([pd.DataFrame(le, columns=gres.grids['gene_exp'].columns.values) for le in ls_exp])
-    df_coord = pd.concat([pd.DataFrame({'c1':c[:,0],'c2':c[:,1]}) for i, c in enumerate(ls_coord)])
+    gene_exp = gres.grids['gene_exp'] if 'gene_exp' in gres.grids else gres.grids['proj']
+    df_exp = pd.concat([pd.DataFrame(le, columns=gene_exp.columns.values) for le in ls_exp])
+    df_coord = pd.concat([pd.DataFrame({f'c{k+1}':c[:,k] for k in range(c.shape[1])}) for i, c in enumerate(ls_coord)])
     df_time = pd.concat([pd.DataFrame({'time':t.ravel()}) for i ,t in enumerate(ls_time)])
     
     gres.simulating[f'{prefix}_N'] = df_pc.shape[0]
@@ -171,8 +174,10 @@ def get_sim(t, gres, starts, n=50):
     ----------
     Lists for simulated spaces, expressions, embeddings and pseudotime 
     """
-    exps = t.gres.grids['gene_exp'].values.astype('float')
+    gene_exp = t.gres.grids['gene_exp'] if 'gene_exp' in t.gres.grids else t.gres.grids['proj']
+    exps = gene_exp.values.astype('float')
     grids = t.gres.grids['grids']
+    k = grids.shape[1] + 1
     times = t.gres.grids['pseudotime']
     mapped_grids = t.gres.grids['mapped_grids']
     env = t.env
@@ -193,9 +198,9 @@ def get_sim(t, gres, starts, n=50):
     for i in range(n):
         diff = t.sim.sim(state, expression, embed, time)
         
-        next_state = state + diff[:-3-len(expression)]
-        next_expression = expression + diff[-3-len(expression):-3]
-        next_embed = embed + diff[-3:-1]
+        next_state = state + diff[:-k-len(expression)]
+        next_expression = expression + diff[-k-len(expression):-k]
+        next_embed = embed + diff[-k:-1]
         next_time = time + diff[-1]
         
         ls_state.append(next_state)
