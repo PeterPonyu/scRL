@@ -6,7 +6,7 @@ import tqdm
 from collections import namedtuple, deque
 from .utils import get_dist
 from .GridNDCore import is_nd
-from .EnvironmentNDCore import d_rewards_nd, c_rewards_nd
+from .EnvironmentNDCore import d_rewards_nd, c_rewards_nd, MISSING_STARTS_PROBS
 
 
 class deepEnv:
@@ -41,6 +41,8 @@ class deepEnv:
         self.mapped_grids = gres.grids['mapped_grids']
         self.starts_probs = None
         if starts_probs:
+            if 'starts_probs' not in gres.grids:
+                raise ValueError(MISSING_STARTS_PROBS)
             self.starts_probs = gres.grids['starts_probs']
         
         self.starts_grids = gres.grids['starts_cluster_grids']

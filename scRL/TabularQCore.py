@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import random
+from .EnvironmentNDCore import MISSING_STARTS_PROBS
 
 class tabularEnv:
     """
@@ -33,6 +34,8 @@ The step method is where the action takes place. If the environment has not been
         self.mapped_grids = gres.grids['mapped_grids']
         self.starts_probs = None
         if starts_probs:
+            if 'starts_probs' not in gres.grids:
+                raise ValueError(MISSING_STARTS_PROBS)
             self.starts_probs = gres.grids['starts_probs']
         
         self.starts_grids = gres.grids['starts_cluster_grids']

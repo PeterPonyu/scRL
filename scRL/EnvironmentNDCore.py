@@ -13,6 +13,11 @@ import pandas as pd
 from .GridNDCore import check_labels, get_state_nd
 
 
+MISSING_STARTS_PROBS = ('starts_probs=True needs start probabilities: call c_rewards(..., starts_keys=[...]) '
+                        'first, or use starts_probs=False (starts_prob=False in trainer) to start from the start '
+                        'cluster.')
+
+
 def _as_list(names):
     return [names] if np.isscalar(names) else list(names)
 
@@ -208,9 +213,7 @@ class _gridEnvND:
         self.starts_probs = None
         if starts_probs:
             if 'starts_probs' not in gres.grids:
-                raise ValueError('starts_probs=True needs start probabilities: call '
-                                 'c_rewards(..., starts_keys=[...]) first, or use starts_probs=False '
-                                 '(starts_prob=False in trainer) to start from the start cluster.')
+                raise ValueError(MISSING_STARTS_PROBS)
             self.starts_probs = gres.grids['starts_probs']
         self.starts_grids = gres.grids['starts_cluster_grids']
         self.mapped_boundary = gres.grids['mapped_boundary']

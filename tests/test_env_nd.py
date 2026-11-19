@@ -129,3 +129,11 @@ def test_reachability_and_warning(tree3d):
         deepEnvND(gres, tree3d[2], max_step=0, KNN=10, reward_type='d', reward_mode='Decision', starts_probs=False)
     with pytest.raises(ValueError, match='starts_keys'):
         deepEnvND(gres, tree3d[2], reward_type='d', reward_mode='Decision', starts_probs=True)
+
+
+def test_2d_envs_explain_missing_start_probabilities(scan2d):
+    scRL.d_rewards(scan2d, starts=['root'], ends=['branchA'])
+    with pytest.raises(ValueError, match='starts_keys'):
+        deepEnv(scan2d, Z2, KNN=10, reward_type='d', reward_mode='Decision', starts_probs=True)
+    with pytest.raises(ValueError, match='starts_keys'):
+        tabularEnv(scan2d, reward_type='d', reward_mode='Decision', starts_probs=True)
