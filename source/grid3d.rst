@@ -102,3 +102,8 @@ Four and five dimensions
 experimental and not yet meant for results.
 
 A complete script on the paul15 data is in ``examples/grid3d_paul15.py`` in the repository.
+
+``examples/grid3d_walkthrough.py`` goes through every mode on a 3-D grid of the same data: lineage rewards in
+both modes, gene rewards, the exact solution next to a soft actor-critic, a fate map over three lineages,
+trajectories and the simulator, two conditions compared on one grid, and a rotating and an interactive view.
+It runs from the repository root in a few minutes and writes its figures to ``grid3d_walkthrough_output/``.

@@ -141,6 +141,8 @@ In 3-D the agent moves one grid step along one axis at a time, so it has six mov
 
 A complete script on the paul15 data is in `examples/grid3d_paul15.py`.
 
+`examples/grid3d_walkthrough.py` runs every mode on a 3-D grid of the same data and writes its figures to `grid3d_walkthrough_output/`.
+
 ## Exact solution and lineage gate
 
 The grid environment is small and deterministic, so the best return from every grid point can also be computed exactly, without training and without a random seed. `scRL.exact_values(gres)` stores this value and the best move for the current reward; `scRL.fate_gate` combines one value map per lineage into lineage weights, the heaviest lineage and how undecided each point is, and `scRL.plot_fates` draws them.
