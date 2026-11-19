@@ -9,6 +9,8 @@ from .utils import get_state_value
 from .ExactCore import exact_values
 from .FateCore import fate_gate
 from .EnvironmentNDCore import reachability
+from .ConditionCore import (project_conditions, compare_abundance, condition_grid, compare_values,
+                            compare_fates)
 from .PlotCore import (plot_grids, plot_slices, plot_views, plot_trend, plot_clusters, plot_policy,
                        plot_training, plot_projections, plot_report, save_rotation, plot_style)
 
@@ -25,6 +27,7 @@ __all__ = ['grids_from_embedding', 'align_pseudotime', 'project_cluster', 'proje
            , 'plot_clusters', 'plot_policy', 'plot_training'
            , 'plot_projections', 'plot_report', 'save_rotation', 'plot_style'
            , 'exact_values', 'fate_gate', 'reachability'
+           , 'project_conditions', 'compare_abundance', 'condition_grid', 'compare_values', 'compare_fates'
            # Backward compatibility
            , 'lineage_rewards', 'gene_rewards', 'project_expression']
 
