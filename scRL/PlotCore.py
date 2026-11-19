@@ -1,4 +1,6 @@
 """Views of a grid and of the values stored on it."""
+import contextlib
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -261,19 +263,110 @@ def _policy_moves(gres, trainer, travel):
     return move * _lattice_spacing(gres)[0]
 
 
-def _default_every(gres):
-    """Step through the travel points so that about 400 arrows are drawn."""
-    return max(1, int(round(len(gres.grids['mapped_travel']) / 400)))
+def _lattice_coords(gres, flat):
+    """Integer lattice coordinates (points x axes) of flat grid indices."""
+    return np.array(np.unravel_index(np.asarray(flat), _lattice_spacing(gres)[1])).T
+
+
+def _auto_step(gres, dims, target=15):
+    """Sub-lattice step so that about ``target`` arrows span the longest of the given lattice axes."""
+    kept = _lattice_coords(gres, gres.grids['mapped_grids'])[:, dims]
+    return max(1, int(np.ceil((np.ptp(kept, axis=0).max() + 1) / target)))
+
+
+def _thinned_travel(gres, dims, step):
+    """Travel points whose lattice coordinates along ``dims`` are multiples of ``step``."""
+    travel = np.asarray(gres.grids['mapped_travel'])
+    keep = (_lattice_coords(gres, travel)[:, dims] % step == 0).all(1)
+    return travel[keep]
+
+
+ARROW = '#333333'
+
+
+def _sections(gres, axis, n_slices, dims):
+    """How a grid is cut into slabs: the cut axis, the two shown axes and a function giving each point's slab."""
+    dims = list(dims)
+    cut, shown = dims[axis], [d for i, d in enumerate(dims) if i != axis]
+    spacing, shape = _lattice_spacing(gres)
+    origin = np.asarray(gres.grids['grids'])[0]
+    kept = _lattice_coords(gres, gres.grids['mapped_grids'])[:, cut]
+    lo, width = kept.min() - .5, (kept.max() - kept.min() + 1) / n_slices
+
+    def slab_of(coords):
+        u = np.rint((coords[:, cut] - origin[cut]) / spacing[cut])
+        return np.clip(np.floor((u - lo) / width), 0, n_slices - 1)
+
+    def bounds(k):
+        return origin[cut] + (lo + k * width) * spacing[cut], origin[cut] + (lo + (k + 1) * width) * spacing[cut]
+
+    return cut, shown, slab_of, bounds
+
+
+def _draw_section(ax, k, layers, cut, shown, slab_of, bounds, limits, cmap, vmin, vmax, s, arrows=None,
+                  title_size='medium'):
+    """Draw slab ``k`` of a sectioned grid into a 2-D axes; returns the colour-mapped artist, if any."""
+    mappable = None
+    for coords, colour, vals, _ in layers:
+        slab = slab_of(coords) == k
+        colour_k = colour[slab] if np.ndim(colour) > 1 else colour
+        artist = _scatter(ax, coords[slab][:, shown], colour_k, None if vals is None else vals[slab], s, cmap,
+                          vmin, vmax)
+        if vals is not None:
+            mappable = artist
+    if arrows is not None:
+        tails, moves, length = arrows
+        here = slab_of(tails) == k
+        inplane, across = moves[here][:, shown], moves[here][:, cut]
+        size = np.linalg.norm(inplane, axis=1)
+        mostly_across = np.abs(across) > size
+        draw = ~mostly_across & (size > 0)
+        if draw.any():
+            uv = inplane[draw] / size[draw, None] * length
+            ax.quiver(*tails[here][draw][:, shown].T, *uv.T, angles='xy', scale_units='xy', scale=1,
+                      width=.005, headwidth=3.8, headlength=4, headaxislength=3.6, color=ARROW, alpha=.85, zorder=3)
+        for sign, marker in ((1, '^'), (-1, 'v')):
+            m = mostly_across & (np.sign(across) == sign)
+            if m.any():
+                ax.plot(*tails[here][m][:, shown].T, ls='', marker=marker, ms=4, mfc='white', mec=ARROW, mew=.8,
+                        zorder=3)
+    a, b = bounds(k)
+    ax.set_title(f'Dim {cut + 1}: {a:.2f} to {b:.2f}', fontsize=title_size)
+    ax.set_xlim(limits[0])
+    ax.set_ylim(limits[1])
+    ax.set_aspect('equal')
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_xlabel(f'Dim {shown[0] + 1}')
+    ax.set_ylabel(f'Dim {shown[1] + 1}')
+    return mappable
+
+
+def _limits(points, pad=.03):
+    span = np.ptp(points, axis=0)
+    return list(zip(points.min(0) - pad * span, points.max(0) + pad * span))
+
+
+def _panel_grid(fig_w_extra, ncols, nrows, aspect, panel_w):
+    """Figure and axes laid out in inches: panels of width ``panel_w`` and height ``aspect * panel_w``."""
+    panel_h = float(np.clip(aspect, .35, 2.5)) * panel_w
+    left, gap_x, top, gap_y, bottom = .45, .5, .35, .75, .45
+    W = left + ncols * panel_w + (ncols - 1) * gap_x + fig_w_extra
+    H = top + nrows * panel_h + (nrows - 1) * gap_y + bottom
+    fig = plt.figure(figsize=(W, H))
+    axes = [fig.add_axes([(left + c * (panel_w + gap_x)) / W, (H - top - (r + 1) * panel_h - r * gap_y) / H,
+                          panel_w / W, panel_h / H]) for r in range(nrows) for c in range(ncols)]
+    return fig, axes, (left + ncols * panel_w + (ncols - 1) * gap_x) / W
 
 
 def plot_slices(gres, key=None, axis=2, n_slices=6, cells=False, dims=(0, 1, 2), cmap='plasma', s=None,
-                ncols=None, figsize=None, policy=None):
+                ncols=None, figsize=None, policy=None, policy_every=None):
     """
     Cut a 3-D (or higher) grid into slabs along one axis and draw each slab as a 2-D section.
 
     The slabs have equal width in grid steps along ``dims[axis]``, so every kept grid point (or every cell,
     with ``cells=True``) falls in exactly one slab. All panels share the axis limits and one colour scale;
-    each panel title gives the slab's coordinate range.
+    each panel title gives the slab's coordinate range. The figure size follows the data aspect.
 
     Parameters
     ----------
@@ -306,44 +399,44 @@ def plot_slices(gres, key=None, axis=2, n_slices=6, cells=False, dims=(0, 1, 2),
         Panels per row.
         (Default: None, at most 3)
     figsize
-        Figure size.
-        (Default: None, from the number of panels)
+        Figure size; the panels are then placed by matplotlib.
+        (Default: None, from the number of panels and the data aspect)
     policy
-        A trained ``scRL.trainer``: draw at each travel point of a slab the in-plane part of the move the
-        agent tends to make (as in ``plot_policy``, in embedding units). A move mainly across the slab is
-        drawn as a marker instead: ``^`` towards higher, ``v`` towards lower values of the slicing axis.
+        A trained ``scRL.trainer``: draw the direction the agent tends to move in, as in ``plot_policy``,
+        at travel points on a regular sub-lattice of the slab. Moves mainly in the plane are drawn as
+        arrows 0.8 sub-lattice steps long; moves mainly across the slab as small open markers, ``^`` towards
+        higher and ``v`` towards lower values of the slicing axis.
         (Default: None)
+    policy_every
+        Sub-lattice step, in grid steps, of the policy arrows.
+        (Default: None, so that about 15 arrows span the longer side of a panel)
 
     Returns
     ----------
     The matplotlib figure.
     """
     _require_3d(gres, 'plot_slices')
-    dims = list(dims)
-    cut, shown = dims[axis], [d for i, d in enumerate(dims) if i != axis]
-    spacing, shape = _lattice_spacing(gres)
-    origin = np.asarray(gres.grids['grids'])[0]
-    kept = np.unravel_index(np.asarray(gres.grids['mapped_grids']), shape)[cut]
-    lo, width = kept.min() - .5, (kept.max() - kept.min() + 1) / n_slices
-
-    def slab_of(coords):
-        u = np.rint((coords[:, cut] - origin[cut]) / spacing[cut])
-        return np.clip(np.floor((u - lo) / width), 0, n_slices - 1)
-
-    layers = _layers(gres, key, cells, list(range(len(shape))), rim=False)
+    cut, shown, slab_of, bounds = _sections(gres, axis, n_slices, dims)
+    layers = _layers(gres, key, cells, list(range(np.asarray(gres.grids['grids']).shape[1])), rim=False)
     values = [v for _, _, v, _ in layers if v is not None]
     vmin, vmax = (min(v.min() for v in values), max(v.max() for v in values)) if values else (None, None)
     allxy = np.vstack([c[:, shown] for c, _, _, _ in layers])
-    pad = .03 * np.ptp(allxy, axis=0)
-    limits = list(zip(allxy.min(0) - pad, allxy.max(0) + pad))
+    limits = _limits(allxy)
+    arrows = None
     if policy is not None:
-        travel = np.asarray(gres.grids['mapped_travel'])
-        tails = np.asarray(gres.grids['grids'])[travel]
-        moves, tail_slab = _policy_moves(gres, policy, travel), slab_of(tails)
+        step = _auto_step(gres, shown) if policy_every is None else int(policy_every)
+        travel = _thinned_travel(gres, shown, step)
+        length = .8 * step * _lattice_spacing(gres)[0][shown].mean()
+        arrows = (np.asarray(gres.grids['grids'])[travel], _policy_moves(gres, policy, travel), length)
+    handles = _legend_handles(gres, layers)
     ncols = ncols or min(n_slices, 3)
     nrows = int(np.ceil(n_slices / ncols))
-    fig, axes = plt.subplots(nrows, ncols, figsize=figsize or (3 * ncols + 1.5, 3.2 * nrows), squeeze=False)
-    axes = axes.ravel()
+    if figsize is None:
+        aspect = np.ptp(allxy[:, 1]) / np.ptp(allxy[:, 0])
+        fig, axes, right = _panel_grid(1.6 if handles else 1.1, ncols, nrows, aspect, 2.8)
+    else:
+        fig, axes = plt.subplots(nrows, ncols, figsize=figsize, squeeze=False)
+        axes, right = list(axes.ravel()), .88
     if s is None:
         s = 4 if cells else 10
     mappable = None
@@ -351,40 +444,13 @@ def plot_slices(gres, key=None, axis=2, n_slices=6, cells=False, dims=(0, 1, 2),
         if k >= n_slices:
             ax.set_visible(False)
             continue
-        for coords, colour, vals, _ in layers:
-            slab = slab_of(coords) == k
-            colour_k = colour[slab] if np.ndim(colour) > 1 else colour
-            artist = _scatter(ax, coords[slab][:, shown], colour_k, None if vals is None else vals[slab], s, cmap,
-                              vmin, vmax)
-            if vals is not None:
-                mappable = artist
-        if policy is not None:
-            here = tail_slab == k
-            inplane, across = moves[here][:, shown], moves[here][:, cut]
-            mostly_across = np.abs(across) > np.linalg.norm(inplane, axis=1)
-            arrow = ~mostly_across & (np.linalg.norm(inplane, axis=1) > 0)
-            if arrow.any():
-                ax.quiver(*tails[here][arrow][:, shown].T, *inplane[arrow].T, angles='xy', scale_units='xy',
-                          scale=1, width=.006, color='k', zorder=3)
-            for sign, marker in ((1, '^'), (-1, 'v')):
-                m = mostly_across & (np.sign(across) == sign)
-                if m.any():
-                    ax.plot(*tails[here][m][:, shown].T, ls='', marker=marker, ms=3, color='k', zorder=3)
-        a, b = origin[cut] + (lo + k * width) * spacing[cut], origin[cut] + (lo + (k + 1) * width) * spacing[cut]
-        ax.set_title(f'Dim {cut + 1}: {a:.2f} to {b:.2f}', fontsize='medium')
-        ax.set_xlim(limits[0])
-        ax.set_ylim(limits[1])
-        ax.set_aspect('equal')
-        ax.set_xticks([])
-        ax.set_yticks([])
-        ax.set_xlabel(f'Dim {shown[0] + 1}')
-        ax.set_ylabel(f'Dim {shown[1] + 1}')
-    handles = _legend_handles(gres, layers)
+        m = _draw_section(ax, k, layers, cut, shown, slab_of, bounds, limits, cmap, vmin, vmax, s, arrows)
+        mappable = m or mappable
+    W = fig.get_figwidth()
     if handles:
-        fig.subplots_adjust(right=.8)
-        fig.legend(handles=handles, loc='center left', bbox_to_anchor=(.81, .5), frameon=False)
+        fig.legend(handles=handles, loc='center left', bbox_to_anchor=(right + .1 / W, .5), frameon=False)
     elif mappable is not None:
-        fig.colorbar(mappable, ax=axes[:n_slices].tolist(), shrink=.8, label=key)
+        fig.colorbar(mappable, cax=fig.add_axes([right + .25 / W, .2, .14 / W, .6], label='<colorbar>'), label=key)
     return fig
 
 
@@ -418,7 +484,7 @@ def plot_views(gres, key=None, views=((20, -60), (20, 30), (90, -90)), cells=Fal
         (Default: None)
     figsize
         Figure size.
-        (Default: None, 4.5 inches per view)
+        (Default: None, 4 inches per view)
 
     Returns
     ----------
@@ -426,9 +492,9 @@ def plot_views(gres, key=None, views=((20, -60), (20, 30), (90, -90)), cells=Fal
     """
     _require_3d(gres, 'plot_views')
     n = len(views)
-    fig = plt.figure(figsize=figsize or (4.5 * n + 1.5, 4.8))
-    right = 1 - 1.5 / fig.get_figwidth()
-    axes = [fig.add_axes([i * right / n, .02, right / n, .88], projection='3d') for i in range(n)]
+    fig = plt.figure(figsize=figsize or (4 * n + 1.4, 4))
+    right = 1 - 1.4 / fig.get_figwidth()
+    axes = [fig.add_axes([i * right / n, .01, right / n, .9], projection='3d') for i in range(n)]
     for ax, view in zip(axes, views):
         plot_grids(gres, key=key, cells=cells, dims=dims, view=view, ax=ax, cmap=cmap, s=s, colorbar=False,
                    title=f'elevation {view[0]}, azimuth {view[1]}')
@@ -437,7 +503,130 @@ def plot_views(gres, key=None, views=((20, -60), (20, 30), (90, -90)), cells=Fal
     if handles:
         fig.legend(handles=handles, loc='center left', bbox_to_anchor=(right, .5), frameon=False)
     elif key is not None and mappables:
-        fig.colorbar(mappables[-1], cax=fig.add_axes([right + .2 / fig.get_figwidth(), .2, .015, .6]), label=key)
+        fig.colorbar(mappables[-1], cax=fig.add_axes([right + .2 / fig.get_figwidth(), .2, .015, .6], label='<colorbar>'), label=key)
+    return fig
+
+
+def _projection(gres, key, collapse, dims, how):
+    """
+    One orthogonal projection: (values or RGBA image, x edges, y edges, shown axes). Values are the max or mean
+    over the travel points stacked along ``collapse`` (their number when ``key`` is None); positions without a
+    travel point are masked.
+    """
+    shown = [d for d in dims if d != collapse]
+    travel = np.asarray(gres.grids['mapped_travel'])
+    c = _lattice_coords(gres, travel)[:, shown]
+    lo, hi = c.min(0), c.max(0)
+    nx, ny = hi - lo + 1
+    flat = (c[:, 1] - lo[1]) * nx + (c[:, 0] - lo[0])
+    spacing = _lattice_spacing(gres)[0]
+    origin = np.asarray(gres.grids['grids'])[0]
+    xe = origin[shown[0]] + (np.arange(lo[0], hi[0] + 2) - .5) * spacing[shown[0]]
+    ye = origin[shown[1]] + (np.arange(lo[1], hi[1] + 2) - .5) * spacing[shown[1]]
+    if key == 'clusters':
+        p = _positions(gres, travel)
+        labels = np.asarray(gres.grids['mapped_grids_clusters'])[p]
+        colours = np.asarray(gres.grids['mapped_grids_colors'])[p]
+        lut = dict(zip(labels.tolist(), colours))
+        order = {name: i for i, name in enumerate(_cluster_order(gres))}
+        image = np.zeros((ny * nx, 4))
+        frame = pd.DataFrame({'pix': flat, 'label': labels})
+        for pix, group in frame.groupby('pix'):
+            counts = group['label'].value_counts()
+            best = sorted(counts.index[counts == counts.max()], key=lambda n: order.get(n, len(order)))[0]
+            image[pix, :3], image[pix, 3] = np.asarray(lut[best])[:3], 1
+        return image.reshape(ny, nx, 4), xe, ye, shown
+    values = np.ones(len(travel)) if key is None else _grid_values(gres, key, travel)
+    frame = pd.Series(values).groupby(flat)
+    agg = frame.size() if key is None else (frame.max() if how == 'max' else frame.mean())
+    grid = np.full(ny * nx, np.nan)
+    grid[agg.index.to_numpy()] = agg.to_numpy(dtype=float)
+    return np.ma.masked_invalid(grid.reshape(ny, nx)), xe, ye, shown
+
+
+def _draw_projection(ax, data, collapse, how, key, cmap, vmin, vmax, title_size='medium'):
+    image, xe, ye, shown = data
+    if image.ndim == 3:
+        ax.imshow(image, origin='lower', extent=(xe[0], xe[-1], ye[0], ye[-1]), interpolation='nearest')
+        mappable = None
+    else:
+        mappable = ax.pcolormesh(xe, ye, image, cmap=cmap, vmin=vmin, vmax=vmax)
+    what = 'number of grid points' if key is None else ('most frequent cluster' if key == 'clusters' else how)
+    ax.set_title(f'Dim {shown[0] + 1}-Dim {shown[1] + 1} plane, {what} along Dim {collapse + 1}',
+                 fontsize=title_size)
+    ax.set_aspect('equal')
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_xlabel(f'Dim {shown[0] + 1}')
+    ax.set_ylabel(f'Dim {shown[1] + 1}')
+    return mappable
+
+
+def plot_projections(gres, key=None, how='max', dims=(0, 1, 2), cmap='plasma', figsize=None):
+    """
+    The grid collapsed along each of three axes onto the plane of the other two.
+
+    Each panel is a raster with one pixel per lattice position of the plane. A pixel shows the maximum
+    (``how='max'``) or mean (``how='mean'``) of the value over the travel points stacked along the collapsed
+    axis; positions without a travel point are blank. All panels share one colour scale.
+
+    Parameters
+    ----------
+    gres
+        Grids results of a 3-D or higher grid.
+    key
+        Value to show (a key of ``gres.grids``). None shows the number of travel points along the collapsed
+        axis, that is how thick the grid is there. ``'clusters'`` shows the most frequent cluster, with a
+        legend.
+        (Default: None)
+    how
+        'max' or 'mean'.
+        (Default: 'max')
+    dims
+        The three embedding axes.
+        (Default: (0, 1, 2))
+    cmap
+        Colour map for the values.
+        (Default: 'plasma')
+    figsize
+        Figure size.
+        (Default: None, from the data aspect)
+
+    Returns
+    ----------
+    The matplotlib figure.
+    """
+    _require_3d(gres, 'plot_projections')
+    if how not in ('max', 'mean'):
+        raise ValueError(f'how must be "max" or "mean", got {how!r}')
+    dims = list(dims)
+    data = [_projection(gres, key, d, dims, how) for d in dims]
+    if key == 'clusters':
+        vmin = vmax = None
+    else:
+        vmin = min(np.ma.min(p[0]) for p in data)
+        vmax = max(np.ma.max(p[0]) for p in data)
+    widths = [p[1][-1] - p[1][0] for p in data]
+    heights = [p[2][-1] - p[2][0] for p in data]
+    panel_h = 2.6
+    panel_w = [panel_h * w / h for w, h in zip(widths, heights)]
+    left, gap, extra, top, bottom = .45, .5, 1.6 if key == 'clusters' else 1.1, .55, .45
+    W = left + sum(panel_w) + gap * 2 + extra
+    H = top + panel_h + bottom
+    fig = plt.figure(figsize=figsize or (W, H))
+    W, H = fig.get_figwidth(), fig.get_figheight()
+    x, mappable = left, None
+    for d, p, w in zip(dims, data, panel_w):
+        ax = fig.add_axes([x / W, bottom / H, w / W, panel_h / H])
+        mappable = _draw_projection(ax, p, d, how, key, cmap, vmin, vmax, title_size='small') or mappable
+        x += w + gap
+    right = (x - gap) / W
+    if key == 'clusters':
+        handles = _legend_handles(gres, _layers(gres, 'clusters', False, dims, False))
+        fig.legend(handles=handles, loc='center left', bbox_to_anchor=(right + .1 / W, .5), frameon=False)
+    else:
+        fig.colorbar(mappable, cax=fig.add_axes([right + .25 / W, .2, .14 / W, .6], label='<colorbar>'),
+                     label='grid points' if key is None else key)
     return fig
 
 
@@ -567,15 +756,15 @@ def plot_clusters(gres, key, cells=True, ax=None):
     return ax
 
 
-def plot_policy(gres, trainer, dims=(0, 1, 2), view=(22, -58), ax=None, every=None, color='k', key=None,
-                cmap='plasma'):
+def plot_policy(gres, trainer, dims=(0, 1, 2), view=(22, -58), ax=None, every=None, color=ARROW, key=None,
+                cmap='plasma', interactive=False):
     """
-    Arrows showing where the agent tends to move from the travel grid points.
+    Arrows showing where the agent tends to move, at travel grid points on a regular sub-lattice.
 
-    ActorCritic and SAC: the expected move, the moves weighted by the actor's probabilities at the grid point's
-    state. DDQN and TabularQ: the move with the largest Q-value. On 2-D grids the arrows are the moves in
-    embedding units; on 3-D and higher grids they show the direction only, each 0.8 grid steps long, over
-    small faint grid points coloured by ``key`` (no points when ``key`` is None).
+    ActorCritic and SAC: the expected move, the moves weighted by the actor's probabilities at the grid
+    point's state. DDQN and TabularQ: the move with the largest Q-value. On 2-D grids the arrows are the
+    moves in embedding units; on 3-D and higher grids they show the direction only, each 0.8 sub-lattice
+    steps long, over small faint grid points coloured by ``key`` (no points when ``key`` is None).
 
     Parameters
     ----------
@@ -593,26 +782,32 @@ def plot_policy(gres, trainer, dims=(0, 1, 2), view=(22, -58), ax=None, every=No
         Axes to draw into; a 3-D axes for 3-D and higher grids.
         (Default: None, a new figure)
     every
-        Draw an arrow at every ``every``-th travel point.
-        (Default: None, so that about 400 arrows are drawn)
+        Sub-lattice step in grid steps: arrows are drawn at travel points whose lattice coordinates are
+        multiples of ``every``.
+        (Default: None, so that about 15 arrows span the longest side of the grid)
     color
         Arrow colour.
-        (Default: 'k')
+        (Default: dark grey)
     key
         Colour the grid points underneath by this stored value.
         (Default: None)
     cmap
         Colour map for ``key``.
         (Default: 'plasma')
+    interactive
+        Return a rotatable plotly figure with one cone per arrow (3-D and higher grids, needs plotly).
+        (Default: False)
 
     Returns
     ----------
-    The matplotlib axes.
+    The matplotlib axes, or a plotly figure when ``interactive`` is True.
     """
     three = np.asarray(gres.embedding['embedding']).shape[1] > 2
     dims = list(dims) if three else [0, 1]
-    every = _default_every(gres) if every is None else every
-    travel = np.asarray(gres.grids['mapped_travel'])[::every]
+    if interactive and not three:
+        raise ValueError('interactive policy view needs a 3-D grid')
+    step = _auto_step(gres, dims) if every is None else int(every)
+    travel = _thinned_travel(gres, dims, step)
     arrows = _policy_moves(gres, trainer, travel)[:, dims]
     tails = np.asarray(gres.grids['grids'])[travel][:, dims]
     if not three:
@@ -624,6 +819,12 @@ def plot_policy(gres, trainer, dims=(0, 1, 2), view=(22, -58), ax=None, every=No
                 c.set_color(GREY)
         ax.quiver(*tails.T, *arrows.T, color=color, angles='xy', scale_units='xy', scale=1, width=.003)
         return ax
+    length = np.linalg.norm(arrows, axis=1)
+    moving = length > 0
+    unit = arrows[moving] / length[moving, None]
+    size = .8 * step * _lattice_spacing(gres)[0][dims].mean()
+    if interactive:
+        return _plotly_policy(gres, tails[moving], unit, size, key, dims, cmap)
     if ax is None:
         fig = plt.figure(figsize=(6.5, 5.5))
         ax = fig.add_subplot(projection='3d')
@@ -636,13 +837,174 @@ def plot_policy(gres, trainer, dims=(0, 1, 2), view=(22, -58), ax=None, every=No
         else:
             ax.legend(handles=_legend_handles(gres, [points]), loc='upper left', bbox_to_anchor=(1.02, 1),
                       frameon=False)
-    step = _lattice_spacing(gres)[0][dims].mean()
-    length = np.linalg.norm(arrows, axis=1)
-    moving = length > 0
-    shown = arrows[moving] / length[moving, None] * .8 * step
-    ax.quiver(*tails[moving].T, *shown.T, color=color, lw=1.2, arrow_length_ratio=.35)
+    ax.quiver(*tails[moving].T, *(unit * size).T, color=color, lw=1.1, arrow_length_ratio=.45)
     _style_3d(ax, dims, view, np.asarray(gres.grids['grids'])[np.asarray(gres.grids['mapped_grids'])][:, dims])
     return ax
+
+
+def _plotly_policy(gres, tails, unit, size, key, dims, cmap):
+    try:
+        import plotly.graph_objects as go
+    except ImportError:
+        raise ImportError('plot_policy(interactive=True) needs plotly: pip install plotly') from None
+    from matplotlib.colors import to_hex
+    coords, colour, values, _ = _layers(gres, 'clusters' if key == 'clusters' else key, False, dims, False)[-1]
+    if values is not None:
+        marker = dict(size=3, color=values, colorscale=cmap, showscale=True, colorbar=dict(title=key))
+    elif np.ndim(colour) > 1:
+        marker = dict(size=3, color=[to_hex(c) for c in colour])
+    else:
+        marker = dict(size=3, color=to_hex(GREY))
+    points = go.Scatter3d(mode='markers', marker=marker, opacity=.35, hoverinfo='skip',
+                          **dict(zip('xyz', coords.T)))
+    cones = go.Cone(**dict(zip('xyz', tails.T)), **dict(zip('uvw', unit.T)), sizemode='absolute',
+                    sizeref=size, anchor='tail', colorscale=[[0, ARROW], [1, ARROW]], showscale=False)
+    fig = go.Figure([points, cones])
+    labels = {f'{a}axis_title': f'Dim {d + 1}' for a, d in zip('xyz', dims)}
+    fig.update_layout(scene=dict(aspectmode='data', **labels), showlegend=False)
+    return fig
+
+
+def save_rotation(gres, path, key=None, cells=False, frames=72, elevation=20, fps=12, dpi=100, **kwargs):
+    """
+    Save a turntable animation of the 3-D view of ``plot_grids``: the azimuth turns once round in ``frames``
+    steps.
+
+    Parameters
+    ----------
+    gres
+        Grids results of a 3-D or higher grid.
+    path
+        Output file, '.gif' (written with Pillow) or '.mp4' (needs ffmpeg).
+    key
+        Value to colour by (see ``plot_grids``).
+        (Default: None)
+    cells
+        Draw the cells instead of the grid points.
+        (Default: False)
+    frames
+        Number of frames in one turn.
+        (Default: 72)
+    elevation
+        Elevation of the view.
+        (Default: 20)
+    fps
+        Frames per second.
+        (Default: 12)
+    dpi
+        Resolution of the frames.
+        (Default: 100)
+    **kwargs
+        Further arguments of ``plot_grids``.
+
+    Returns
+    ----------
+    The path written.
+    """
+    from matplotlib import animation
+    _require_3d(gres, 'save_rotation')
+    suffix = str(path).lower().rsplit('.', 1)[-1]
+    if suffix == 'gif':
+        writer = animation.PillowWriter(fps=fps)
+    elif suffix == 'mp4':
+        if not animation.writers.is_available('ffmpeg'):
+            raise RuntimeError('Writing .mp4 needs ffmpeg; install it or save a .gif.')
+        writer = animation.FFMpegWriter(fps=fps)
+    else:
+        raise ValueError(f'path must end in .gif or .mp4, got {path!r}')
+    ax = plot_grids(gres, key=key, cells=cells, view=(elevation, 0), **kwargs)
+
+    def turn(i):
+        ax.view_init(elevation, 360 * i / frames)
+        return []
+
+    anim = animation.FuncAnimation(ax.figure, turn, frames=frames, blit=False)
+    anim.save(str(path), writer=writer, dpi=dpi)
+    plt.close(ax.figure)
+    return path
+
+
+def plot_report(gres, key, clusters=None, title=None, cmap='plasma'):
+    """
+    One page of results for a value on a 3-D grid.
+
+    Row 1: the 3-D view and the three projections (maximum along each axis). Row 2: six sections along the
+    third axis. Rows 1 and 2 share one colour scale. Row 3: the value per cluster (grid points) and the value
+    along pseudotime (grid points, restricted to ``clusters`` when given).
+
+    Parameters
+    ----------
+    gres
+        Grids results of a 3-D or higher grid.
+    key
+        Value to show (a key of ``gres.grids``).
+    clusters
+        Clusters for the trend panel, to follow one lineage.
+        (Default: None, all)
+    title
+        Title of the page.
+        (Default: None)
+    cmap
+        Colour map.
+        (Default: 'plasma')
+
+    Returns
+    ----------
+    The matplotlib figure.
+    """
+    _require_3d(gres, 'plot_report')
+    dims = [0, 1, 2]
+    travel = np.asarray(gres.grids['mapped_travel'])
+    values = _grid_values(gres, key, travel)
+    vmin, vmax = values.min(), values.max()
+    fig = plt.figure(figsize=(12, 13))
+    if title is not None:
+        fig.suptitle(title, y=.985)
+
+    ax3 = fig.add_axes([0, .66, .29, .31], projection='3d')
+    plot_grids(gres, key=key, ax=ax3, cmap=cmap, colorbar=False)
+    for c in ax3.collections:
+        c.set_clim(vmin, vmax)
+    mappable = None
+    for i, d in enumerate(dims):
+        ax = fig.add_axes([.31 + i * .21, .72, .17, .21])
+        mappable = _draw_projection(ax, _projection(gres, key, d, dims, 'max'), d, 'max', key, cmap, vmin, vmax,
+                                    title_size='small') or mappable
+
+    cut, shown, slab_of, bounds = _sections(gres, 2, 6, dims)
+    layers = _layers(gres, key, False, dims, False)
+    limits = _limits(np.vstack([c[:, shown] for c, _, _, _ in layers]))
+    for k in range(6):
+        ax = fig.add_axes([.04 + k * .152, .42, .125, .2])
+        _draw_section(ax, k, layers, cut, shown, slab_of, bounds, limits, cmap, vmin, vmax, 6, title_size='small')
+    fig.colorbar(mappable, cax=fig.add_axes([.925, .46, .012, .45], label='<colorbar>'), label=key)
+
+    plot_clusters(gres, key, cells=False, ax=fig.add_axes([.07, .07, .4, .27]))
+    plot_trend(gres, key, cells=False, clusters=clusters, ax=fig.add_axes([.57, .07, .38, .27]))
+    return fig
+
+
+@contextlib.contextmanager
+def plot_style(font='Arial', base_size=8):
+    """
+    Publication settings for figures drawn inside a ``with`` block; the previous settings are restored after it.
+
+    Sets the font (falling back to DejaVu Sans), the base font size, embedded TrueType fonts in PDF and
+    PostScript, text kept as text in SVG, thin axes lines and 300 dpi for saved figures.
+
+    Parameters
+    ----------
+    font
+        Font family.
+        (Default: 'Arial')
+    base_size
+        Base font size in points.
+        (Default: 8)
+    """
+    with plt.rc_context({'font.family': [font, 'DejaVu Sans'],
+                         'font.size': base_size, 'pdf.fonttype': 42, 'ps.fonttype': 42, 'svg.fonttype': 'none',
+                         'axes.linewidth': .6, 'savefig.dpi': 300}):
+        yield
 
 
 def plot_training(returns, values=None, window=100, ax=None):

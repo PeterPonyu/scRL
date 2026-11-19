@@ -246,7 +246,13 @@ def check_labels(gres, names):
 
 
 def project_cluster_nd(gres, clusters=None, cluster_colors=None):
-    """n-D version of ``project_cluster``: each kept grid point takes the label of its nearest cell."""
+    """
+    n-D version of ``project_cluster``: each kept grid point takes the label of its nearest cell.
+
+    Without ``cluster_colors`` the clusters get the qualitative matplotlib ``tab20`` colours (up to 20
+    clusters) or seaborn ``husl`` colours (more than 20), so that neighbouring clusters differ in hue.
+    """
+    import matplotlib.pyplot as plt
     import seaborn as sns
     if clusters is None:
         print('Warning: No annotation is provided!')
@@ -257,13 +263,8 @@ def project_cluster_nd(gres, clusters=None, cluster_colors=None):
     _, nn = cKDTree(X).query(points, k=1)
     mapped_grids_clusters = np.asarray(list(clusters))[nn]
     if cluster_colors is None:
-        cluster_colors = sns.blend_palette([(0.074, 0.403, 0.619),
-                                            (0.670, 0.227, 0.161),
-                                            (0.815, 0.498, 0.172),
-                                            (0.118, 0.486, 0.291),
-                                            (0.435, 0.427, 0.631),
-                                            (0.412, 0.565, 0.635)],
-                                           n_colors=len(np.unique(clusters)))
+        n = len(clusters.cat.categories)
+        cluster_colors = list(plt.get_cmap('tab20').colors[:n]) if n <= 20 else sns.husl_palette(n)
     color_lut = dict(zip(clusters.cat.categories, cluster_colors))
     gres.embedding['cluster_colors'] = np.array([color_lut[i] for i in clusters])
     gres.grids['mapped_grids_clusters'] = mapped_grids_clusters

@@ -7,7 +7,7 @@ from .Trajectory.Core import get_traj_df
 from .Trajectory.Results import traj_results
 from .utils import get_state_value
 from .PlotCore import (plot_grids, plot_slices, plot_views, plot_trend, plot_clusters, plot_policy,
-                       plot_training)
+                       plot_training, plot_projections, plot_report, save_rotation, plot_style)
 
 # Backward compatibility aliases for deprecated function names
 lineage_rewards = d_rewards  # Renamed: lineage_rewards -> d_rewards
@@ -20,6 +20,7 @@ __all__ = ['grids_from_embedding', 'align_pseudotime', 'project_cluster', 'proje
            , 'get_traj_df', 'traj_results'
            , 'get_state_value', 'plot_grids', 'plot_slices', 'plot_views', 'plot_trend'
            , 'plot_clusters', 'plot_policy', 'plot_training'
+           , 'plot_projections', 'plot_report', 'save_rotation', 'plot_style'
            # Backward compatibility
            , 'lineage_rewards', 'gene_rewards', 'project_expression']
 

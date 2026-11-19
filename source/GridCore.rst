@@ -12,3 +12,13 @@ GridCore
     scRL.GridCore.project
     scRL.GridNDCore.grids_nd
     scRL.PlotCore.plot_grids
+    scRL.PlotCore.plot_views
+    scRL.PlotCore.plot_slices
+    scRL.PlotCore.plot_projections
+    scRL.PlotCore.plot_clusters
+    scRL.PlotCore.plot_trend
+    scRL.PlotCore.plot_policy
+    scRL.PlotCore.plot_training
+    scRL.PlotCore.plot_report
+    scRL.PlotCore.save_rotation
+    scRL.PlotCore.plot_style

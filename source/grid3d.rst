@@ -57,14 +57,37 @@ Parameters
     is used for 3-D embeddings. ``'auto'`` (the default) picks the scan for 2-D input and the occupancy grid
     otherwise; ``method='occupancy'`` can also be used on a 2-D embedding.
 
-Viewing the grid
-----------------
+Viewing results
+---------------
 
-``scRL.plot_grids(gres)`` shows the grid structure, with the travel points dark and the boundary light.
-``scRL.plot_grids(gres, key='pseudotime')`` colours the grid points by a stored value, and
-``cells=True`` colours the cells instead (for values brought back to the cells with ``project_back``).
-``view=(elevation, azimuth)`` turns the 3-D view, and ``interactive=True`` returns a figure that can be
-rotated with the mouse (this needs plotly).
+``scRL.plot_grids(gres, key=...)`` draws the grid points (or, with ``cells=True``, the cells) coloured by a
+stored value in one 3-D view; ``key='clusters'`` colours by cluster, and ``interactive=True`` gives a figure
+that can be rotated with the mouse (this needs plotly).
+
+``scRL.plot_views`` shows the same 3-D view from several angles side by side, with one colour scale.
+
+``scRL.plot_slices`` cuts the grid into slabs along one axis and draws each slab as a flat section, so that the
+inside of the grid can be read; with ``policy=trainer`` it also marks the direction the agent tends to move.
+
+``scRL.plot_projections`` collapses the grid along each axis onto the plane of the other two and shows the
+largest (or mean) value along each line of sight.
+
+``scRL.plot_clusters`` summarises a value per cluster as box plots, highest median first.
+
+``scRL.plot_trend`` follows a value along pseudotime as the median and inter-quartile range in bins;
+``clusters=[...]`` restricts it to one lineage.
+
+``scRL.plot_policy`` draws arrows for the direction the agent tends to move from the grid points.
+
+``scRL.plot_training`` shows the return over the training episodes, and the value estimate when given.
+
+``scRL.plot_report`` puts the 3-D view, the projections, six sections, the per-cluster summary and the trend
+of one value on a single page.
+
+``scRL.save_rotation`` writes a turning view of the grid as a GIF (or an MP4 when ffmpeg is installed).
+
+``with scRL.plot_style():`` applies publication settings (font, font size, embedded fonts, line widths,
+300 dpi) to the figures drawn inside the block only.
 
 Checking the results
 --------------------

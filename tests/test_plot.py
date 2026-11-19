@@ -164,8 +164,19 @@ def test_plot_policy(d, scan2d):
     t.agent.Q.loc[:, :] = 0.0
     t.agent.Q.loc[:, move] = 1.0
     arrows = _arrows(scRL.plot_policy(gres, t, every=2), d == 3)
-    assert len(arrows) == len(range(0, n_travel, 2))
-    np.testing.assert_allclose(arrows, np.tile(expected, (len(arrows), 1)), atol=1e-6)
+    assert len(arrows) == len(_thinned(gres, range(d), 2))
+    np.testing.assert_allclose(arrows, np.tile(expected * (2 if d == 3 else 1), (len(arrows), 1)), atol=1e-6)
+
+
+def _lattice(gres, flat):
+    shape = gres.grids.get('shape', (gres.grids['n'],) * 2)
+    return np.array(np.unravel_index(np.asarray(flat), shape)).T
+
+
+def _thinned(gres, dims, k):
+    """Travel points whose lattice coordinates along dims are multiples of k."""
+    travel = np.asarray(gres.grids['mapped_travel'])
+    return travel[(_lattice(gres, travel)[:, list(dims)] % k == 0).all(1)]
 
 
 def test_plot_training():
@@ -234,16 +245,19 @@ def test_plot_grids_3d_labels_fit(view, scale):
     _assert_layout(scRL.plot_grids(_stretched(scale), key='pseudotime', view=view).figure)
 
 
-def test_plot_policy_3d_default_number_of_arrows():
+def test_plot_policy_3d_default_sub_lattice():
     gres = _gres(3)
     t = _policy_trainer(gres, 'TabularQ', 3)
-    n_travel = len(gres.grids['mapped_travel'])
+    t.agent.Q.loc[:, :] = 0.0
+    t.agent.Q.loc[:, 0] = 1.0
+    kept = _lattice(gres, gres.grids['mapped_grids'])
+    k = max(1, int(np.ceil((np.ptp(kept, axis=0).max() + 1) / 15)))
     ax = scRL.plot_policy(gres, t)
-    n = len(ax.collections[-1]._segments3d) // 3
-    every = max(1, int(round(n_travel / 400)))
-    assert n == len(range(0, n_travel, every))
-    if n_travel >= 600:
-        assert 300 <= n <= 500
+    arrows = _arrows(ax, True)
+    assert len(arrows) == len(_thinned(gres, range(3), k))
+    np.testing.assert_allclose(arrows, np.tile(.8 * k * _offsets(gres)[0] * _spacing(gres), (len(arrows), 1)),
+                               atol=1e-6)
+    assert ax.collections[-1].get_linewidth()[0] > 0
 
 
 def _slices_with_policy(move):
@@ -252,7 +266,7 @@ def _slices_with_policy(move):
     t = _policy_trainer(gres, 'ActorCritic', 3)
     m = gres.grids['actions'].index(move)
     t.agent.actor = lambda x: torch.nn.functional.one_hot(torch.full((len(x),), m, device=x.device), 6).float()
-    return gres, scRL.plot_slices(gres, key='pseudotime', axis=2, n_slices=4, policy=t)
+    return gres, scRL.plot_slices(gres, key='pseudotime', axis=2, n_slices=4, policy=t, policy_every=2)
 
 
 def test_plot_slices_policy_in_plane():
@@ -263,10 +277,11 @@ def test_plot_slices_policy_in_plane():
     for ax in _panels(fig):
         q = [c for c in ax.collections if isinstance(c, Quiver)]
         assert len(q) == 1
-        np.testing.assert_allclose(np.column_stack([q[0].U, q[0].V]), np.tile([h[0], 0], (len(q[0].U), 1)))
+        np.testing.assert_allclose(np.column_stack([q[0].U, q[0].V]), np.tile([.8 * 2 * h[0], 0], (len(q[0].U), 1)))
         assert not [l for l in ax.lines if l.get_marker() in ('^', 'v')]
         total += len(q[0].U)
-    assert total == len(gres.grids['mapped_travel'])
+    assert total == len(_thinned(gres, (0, 1), 2))
+    _assert_layout(fig)
 
 
 def test_plot_slices_policy_across():
@@ -278,7 +293,20 @@ def test_plot_slices_policy_across():
         markers = [l for l in ax.lines if l.get_marker() in ('^', 'v')]
         assert {l.get_marker() for l in markers} == {'^'}
         total += sum(len(l.get_xdata()) for l in markers)
-    assert total == len(gres.grids['mapped_travel'])
+    assert total == len(_thinned(gres, (0, 1), 2))
+
+
+def test_plot_slices_policy_default_thinning():
+    from matplotlib.quiver import Quiver
+    gres, _ = _slices_with_policy('x+')
+    t = _policy_trainer(gres, 'TabularQ', 3)
+    t.agent.Q.loc[:, :] = 0.0
+    t.agent.Q.loc[:, 0] = 1.0
+    fig = scRL.plot_slices(gres, key='pseudotime', policy=t)
+    for ax in _panels(fig):
+        for q in [c for c in ax.collections if isinstance(c, Quiver)]:
+            assert len(np.unique(np.round(q.X, 6))) <= 16 and len(np.unique(np.round(q.Y, 6))) <= 16
+    _assert_layout(fig)
 
 
 def test_plot_trend_restricted_to_clusters():
@@ -324,3 +352,108 @@ def test_interactive_key_menu():
     assert len(fig.data) == 2 and [tr.visible for tr in fig.data] == [True, False]
     buttons = fig.layout.updatemenus[0].buttons
     assert len(buttons) == 2 and buttons[1].args[0]['visible'] == [False, True]
+
+
+def test_default_cluster_colours_on_nd_grids():
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import to_rgba_array
+    X = make_tree(d=3)[0]
+    gres = scRL.grids_from_embedding(X)
+    labels = pd.Series(pd.Categorical([f'c{i % 19:02d}' for i in range(len(X))]))
+    scRL.project_cluster(gres, labels)
+    colours = np.unique(to_rgba_array(gres.embedding['cluster_colors'])[:, :3], axis=0)
+    tab20 = to_rgba_array(plt.get_cmap('tab20').colors[:19])[:, :3]
+    assert len(colours) == 19
+    np.testing.assert_allclose(np.unique(tab20, axis=0), colours)
+
+
+def _pixel_table(gres, key, collapse, how):
+    travel = np.asarray(gres.grids['mapped_travel'])
+    c = _lattice(gres, travel)
+    shown = [d for d in range(3) if d != collapse]
+    pos = {g: p for p, g in enumerate(gres.grids['mapped_grids'])}
+    v = np.asarray(gres.grids[key])[[pos[g] for g in travel]]
+    frame = pd.DataFrame({'a': c[:, shown[0]], 'b': c[:, shown[1]], 'v': v})
+    return frame.groupby(['a', 'b'])['v'].agg(how), c[:, shown].min(0)
+
+
+@pytest.mark.parametrize('how', ['max', 'mean'])
+def test_plot_projections(how):
+    gres = _gres(3)
+    gres.grids['synthetic'] = np.random.default_rng(0).normal(size=len(gres.grids['mapped_grids']))
+    fig = scRL.plot_projections(gres, key='synthetic', how=how)
+    panels = [ax for ax in fig.axes if ax.get_label() != '<colorbar>']
+    assert len(panels) == 3
+    for collapse, ax in enumerate(panels):
+        image = ax.collections[0].get_array()
+        table, lo = _pixel_table(gres, 'synthetic', collapse, how)
+        assert image.count() == len(table)
+        for (a, b), v in table.items():
+            assert image[b - lo[1], a - lo[0]] == pytest.approx(v)
+    _assert_layout(fig)
+    for key in (None, 'clusters'):
+        _assert_layout(scRL.plot_projections(gres, key=key))
+
+
+def test_plot_projections_rejects_2d(scan2d):
+    with pytest.raises(ValueError):
+        scRL.plot_projections(scan2d, key='pseudotime')
+
+
+def test_save_rotation(tmp_path):
+    from PIL import Image
+    path = scRL.save_rotation(_gres(3), tmp_path / 'turn.gif', key='pseudotime', frames=6, dpi=40)
+    assert Image.open(path).n_frames == 6
+    with pytest.raises(ValueError):
+        scRL.save_rotation(_gres(3), tmp_path / 'turn.avi')
+
+
+def test_plot_report():
+    gres = _gres(3)
+    fig = scRL.plot_report(gres, 'pseudotime', clusters=['root', 'trunk', 'branchA'], title='Pseudotime')
+    kinds = [ax.name for ax in fig.axes]
+    assert kinds.count('3d') == 1 and len(fig.axes) == 13
+    assert len([ax for ax in fig.axes if ax.get_label() == '<colorbar>']) == 1
+    _assert_layout(fig)
+
+
+def test_plot_style_is_scoped():
+    import matplotlib as mpl
+    before = {k: mpl.rcParams[k] for k in ('font.size', 'pdf.fonttype', 'savefig.dpi', 'font.family')}
+    with scRL.plot_style(font='Arial', base_size=7):
+        assert mpl.rcParams['font.size'] == 7 and mpl.rcParams['pdf.fonttype'] == 42
+        assert mpl.rcParams['ps.fonttype'] == 42 and mpl.rcParams['svg.fonttype'] == 'none'
+        assert mpl.rcParams['axes.linewidth'] == .6 and mpl.rcParams['savefig.dpi'] == 300
+        assert mpl.rcParams['font.family'] == ['Arial', 'DejaVu Sans']
+    assert {k: mpl.rcParams[k] for k in before} == before
+    with pytest.raises(RuntimeError):
+        with scRL.plot_style(base_size=12):
+            raise RuntimeError('inside')
+    assert {k: mpl.rcParams[k] for k in before} == before
+
+
+def test_interactive_policy():
+    import torch
+    pytest.importorskip('plotly')
+    gres = _gres(3)
+    t = _policy_trainer(gres, 'ActorCritic', 3)
+    t.agent.actor = lambda x: torch.nn.functional.one_hot(torch.full((len(x),), 2, device=x.device), 6).float()
+    fig = scRL.plot_policy(gres, t, key='pseudotime', interactive=True, every=2)
+    assert [tr.type for tr in fig.data] == ['scatter3d', 'cone']
+    cone = fig.data[1]
+    move = _offsets(gres)[2] / np.linalg.norm(_offsets(gres)[2])
+    np.testing.assert_allclose(np.column_stack([cone.u, cone.v, cone.w]), np.tile(move, (len(cone.u), 1)))
+    assert len(cone.u) == len(_thinned(gres, range(3), 2))
+
+
+def test_interactive_policy_needs_3d(scan2d):
+    t = _policy_trainer(scan2d, 'TabularQ', 2)
+    with pytest.raises(ValueError, match='3-D'):
+        scRL.plot_policy(scan2d, t, interactive=True)
+
+
+def test_slices_and_views_fit():
+    gres = _gres(3)
+    for fig in (scRL.plot_slices(gres, key='pseudotime'), scRL.plot_slices(gres, key='clusters'),
+                scRL.plot_slices(gres, key='pseudotime', cells=True), scRL.plot_views(gres, key='pseudotime')):
+        _assert_layout(fig)
