@@ -154,7 +154,9 @@ def test_plot_policy(d, scan2d):
     t = _policy_trainer(gres, 'ActorCritic', d)
     A = len(_offsets(gres))
     t.agent.actor = lambda x: torch.nn.functional.one_hot(torch.full((len(x),), move, device=x.device), A).float()
-    arrows = _arrows(scRL.plot_policy(gres, t), d == 3)
+    if d == 3:
+        expected = .8 * expected                  # 3-D arrows show the direction, 0.8 grid steps long
+    arrows = _arrows(scRL.plot_policy(gres, t, every=1), d == 3)
     assert len(arrows) == n_travel
     np.testing.assert_allclose(arrows, np.tile(expected, (n_travel, 1)), atol=1e-6)
 
@@ -172,6 +174,153 @@ def test_plot_training():
     ax = scRL.plot_training(r, window=11)
     np.testing.assert_allclose(ax.lines[0].get_ydata(), moving_average(r, 11))
     assert len(ax.figure.axes) == 1
-    ax = scRL.plot_training(r, values=np.arange(1000.0), window=10)
+    ax = scRL.plot_training(r, values=np.arange(300.0), window=10)
     np.testing.assert_allclose(ax.lines[0].get_ydata(), np.convolve(r, np.ones(10) / 10, mode='valid'))
     assert len(ax.figure.axes) == 2
+    fig = scRL.plot_training(r, values=np.arange(1000.0), window=11)
+    returns_ax, values_ax = fig.axes
+    assert returns_ax.get_xlabel() == 'Episode' and values_ax.get_xlabel() == 'Step'
+    np.testing.assert_allclose(returns_ax.lines[0].get_ydata(), moving_average(r, 11))
+    np.testing.assert_allclose(values_ax.lines[0].get_ydata(), np.arange(1000.0))
+    with pytest.raises(ValueError):
+        scRL.plot_training(r, values=np.arange(1000.0), ax=returns_ax)
+    _assert_layout(fig)
+
+
+def _text_boxes(fig):
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    texts = []
+    for ax in fig.axes:
+        candidates = [ax.title, ax.xaxis.label, ax.yaxis.label] + ([ax.zaxis.label] if ax.name == '3d' else [])
+        if ax.get_label() == '<colorbar>':
+            candidates += ax.get_yticklabels()
+        texts += [t for t in candidates if t.get_visible() and t.get_text()]
+    return [(t.get_text(), t.get_window_extent(renderer)) for t in texts]
+
+
+def _assert_layout(fig):
+    boxes = _text_boxes(fig)
+    W, H = fig.canvas.get_width_height()
+    for text, b in boxes:
+        assert b.x0 >= 0 and b.y0 >= 0 and b.x1 <= W and b.y1 <= H, f'{text!r} is cut off: {b}'
+    for i, (t1, b1) in enumerate(boxes):
+        for t2, b2 in boxes[i + 1:]:
+            assert not b1.overlaps(b2), f'{t1!r} overlaps {t2!r}'
+
+
+def _stretched(scale):
+    X, labels, _, _ = make_tree(d=3)
+    gres = scRL.grids_from_embedding(X * np.array(scale, dtype=np.float32))
+    scRL.project_cluster(gres, pd.Series(pd.Categorical(labels)))
+    seed_all(0); scRL.align_pseudotime(gres, 'root', boundary=False)
+    return gres
+
+
+SCALES = [(1, 1, 1), (1, 3, 1), (3, 1, 1), (1, 2, 2), (1, 1, 3)]
+
+
+@pytest.mark.parametrize('scale', SCALES)
+def test_plot_views_labels_fit_and_do_not_overlap(scale):
+    fig = scRL.plot_views(_stretched(scale), key='pseudotime')
+    _assert_layout(fig)
+    top = [ax for ax in fig.axes if ax.name == '3d'][2]
+    assert not top.zaxis.label.get_visible()
+
+
+@pytest.mark.parametrize('scale', SCALES)
+@pytest.mark.parametrize('view', [(22, -58), (20, 30), (90, -90), (10, 120)])
+def test_plot_grids_3d_labels_fit(view, scale):
+    _assert_layout(scRL.plot_grids(_stretched(scale), key='pseudotime', view=view).figure)
+
+
+def test_plot_policy_3d_default_number_of_arrows():
+    gres = _gres(3)
+    t = _policy_trainer(gres, 'TabularQ', 3)
+    n_travel = len(gres.grids['mapped_travel'])
+    ax = scRL.plot_policy(gres, t)
+    n = len(ax.collections[-1]._segments3d) // 3
+    every = max(1, int(round(n_travel / 400)))
+    assert n == len(range(0, n_travel, every))
+    if n_travel >= 600:
+        assert 300 <= n <= 500
+
+
+def _slices_with_policy(move):
+    import torch
+    gres = _gres(3)
+    t = _policy_trainer(gres, 'ActorCritic', 3)
+    m = gres.grids['actions'].index(move)
+    t.agent.actor = lambda x: torch.nn.functional.one_hot(torch.full((len(x),), m, device=x.device), 6).float()
+    return gres, scRL.plot_slices(gres, key='pseudotime', axis=2, n_slices=4, policy=t)
+
+
+def test_plot_slices_policy_in_plane():
+    from matplotlib.quiver import Quiver
+    gres, fig = _slices_with_policy('x+')
+    h = _spacing(gres)
+    total = 0
+    for ax in _panels(fig):
+        q = [c for c in ax.collections if isinstance(c, Quiver)]
+        assert len(q) == 1
+        np.testing.assert_allclose(np.column_stack([q[0].U, q[0].V]), np.tile([h[0], 0], (len(q[0].U), 1)))
+        assert not [l for l in ax.lines if l.get_marker() in ('^', 'v')]
+        total += len(q[0].U)
+    assert total == len(gres.grids['mapped_travel'])
+
+
+def test_plot_slices_policy_across():
+    from matplotlib.quiver import Quiver
+    gres, fig = _slices_with_policy('z+')
+    total = 0
+    for ax in _panels(fig):
+        assert not [c for c in ax.collections if isinstance(c, Quiver)]
+        markers = [l for l in ax.lines if l.get_marker() in ('^', 'v')]
+        assert {l.get_marker() for l in markers} == {'^'}
+        total += sum(len(l.get_xdata()) for l in markers)
+    assert total == len(gres.grids['mapped_travel'])
+
+
+def test_plot_trend_restricted_to_clusters():
+    gres = _gres(3)
+    clusters = np.asarray(gres.embedding['clusters'])
+    pt = np.asarray(gres.embedding['pseudotime'])
+    inside = np.isin(clusters, ['root', 'branchA'])
+    gres.embedding['lineage'] = np.where(inside, pt, 0.0)
+    ax = scRL.plot_trend(gres, 'lineage', bins=8, clusters=['root', 'branchA'])
+    np.testing.assert_allclose(ax.lines[0].get_ydata(), _bin_medians(pt[inside], pt[inside], 8))
+    with pytest.raises(ValueError, match='branchA'):
+        scRL.plot_trend(gres, 'lineage', clusters=['nowhere'])
+
+
+def _drawn_rgb(ax):
+    """Face colours (RGB) of the first scatter, as a sorted multiset: 3-D scatters reorder by depth."""
+    ax.figure.canvas.draw()
+    rgb = ax.collections[0].get_facecolors()[:, :3]
+    return rgb[np.lexsort(rgb.T)]
+
+
+def test_cluster_colouring():
+    from matplotlib.colors import to_rgba_array
+    gres = _gres(3)
+    names = list(gres.embedding['clusters'].cat.categories)
+    ax = scRL.plot_grids(gres, key='clusters')
+    travel = gres.grids['mapped_travel']
+    pos = {g: p for p, g in enumerate(gres.grids['mapped_grids'])}
+    stored = to_rgba_array(np.asarray(gres.grids['mapped_grids_colors'])[[pos[g] for g in travel]])[:, :3]
+    np.testing.assert_allclose(_drawn_rgb(ax), stored[np.lexsort(stored.T)])
+    assert [t.get_text() for t in ax.get_legend().get_texts()] == names
+    ax = scRL.plot_grids(gres, key='clusters', cells=True)
+    stored = to_rgba_array(gres.embedding['cluster_colors'])[:, :3]
+    np.testing.assert_allclose(_drawn_rgb(ax), stored[np.lexsort(stored.T)])
+    for fig in (scRL.plot_slices(gres, key='clusters', n_slices=3), scRL.plot_views(gres, key='clusters')):
+        assert len(fig.legends) == 1 and [t.get_text() for t in fig.legends[0].get_texts()] == names
+        assert not [ax for ax in fig.axes if ax.get_label() == '<colorbar>']
+
+
+def test_interactive_key_menu():
+    pytest.importorskip('plotly')
+    fig = scRL.plot_grids(_gres(3), key=['pseudotime', 'clusters'], interactive=True)
+    assert len(fig.data) == 2 and [tr.visible for tr in fig.data] == [True, False]
+    buttons = fig.layout.updatemenus[0].buttons
+    assert len(buttons) == 2 and buttons[1].args[0]['visible'] == [False, True]
