@@ -14,7 +14,7 @@ from .GridNDCore import check_labels, get_state_nd
 
 
 def _as_list(names):
-    return [names] if isinstance(names, str) else list(names)
+    return [names] if np.isscalar(names) else list(names)
 
 
 def _time_weight(scaled, beta, mode):
@@ -41,9 +41,14 @@ def _table(gres, bonus):
 
 
 def _kept_mask(gres):
+    """
+    Kept grid points as an array. On 2-D grids it has the layout of the 2-D code (float, indexed
+    [c1, c0]); on 3-D and higher grids it is a boolean mask in the lattice shape, indexed [c0, c1, ...].
+    """
     mask = np.zeros(int(np.prod(gres.grids['shape'])), bool)
     mask[gres.grids['mapped_grids']] = True
-    return mask.reshape(gres.grids['shape'])
+    mask = mask.reshape(gres.grids['shape'])
+    return mask.T.astype(float) if mask.ndim == 2 else mask
 
 
 def _scaled(t):
@@ -55,7 +60,9 @@ def d_rewards_nd(gres, starts, ends, beta=1, mode='Decision'):
     n-D version of ``d_rewards``: lineage reward table.
 
     Moving into a grid point of an end cluster earns exp(-beta * s) ('Decision') or 1 - exp(-beta * s)
-    ('Contribution'), s being the pseudotime scaled within the end cluster grid points.
+    ('Contribution'), s being the pseudotime scaled within the end cluster grid points. The kept grid
+    points are stored in ``gres.qlearning['matrix']``: on 2-D grids as in the 2-D code (float, indexed
+    [c1, c0]), on 3-D and higher grids as a boolean mask in the lattice shape.
     """
     start_time = time.time()
     starts, ends = _as_list(starts), _as_list(ends)

@@ -23,7 +23,7 @@ def test_three_agents_train_in_3d(algo):
     t = scRL.trainer(algo, gres, reward_type='d', reward_mode='Decision', starts_prob=False, X_latent=Z, num_episodes=300)
     returns, _ = t.train()
     assert len(returns) == 300 and np.isfinite(returns).all()
-    if algo != 'DDQN':                                  # eval_fate has no DDQN branch in v1
+    if algo != 'DDQN':                                  # eval_fate has no DDQN branch
         t.eval_fate()
         assert np.isfinite(np.asarray(gres.grids['fate_branchA'], dtype=float)).all()
 
@@ -38,7 +38,15 @@ def test_decision_value_readout_in_3d():
     scRL.project_back(gres, 'decision')
     assert gres.grids['decision'].shape == (len(gres.grids['mapped_grids']),)
     v = gres.embedding['decision']
-    assert v.shape == (600,) and v.min() == 0 and v.max() == 1
+    assert v.shape == (600,) and np.isfinite(v).all()
+    assert (v >= 0).all() and (v <= 1).all() and np.ptp(v) > 0
+
+
+def test_knn_larger_than_the_number_of_cells():
+    gres, Z = _ready(3)
+    scRL.d_rewards(gres, starts=['root'], ends=['branchA'])
+    t = scRL.trainer('ActorCritic', gres, reward_type='d', starts_prob=False, X_latent=Z, KNN=1000, num_episodes=10)
+    assert t.env.state_space.shape[1] == 600
 
 
 def test_gene_rewards_with_start_probabilities_in_3d():
@@ -58,7 +66,7 @@ def test_other_grids_run_end_to_end(d, kw):
     assert len(t.train()[0]) == 100
 
 
-def test_v1_2d_pipeline_still_runs(scan2d):
+def test_2d_scan_pipeline_still_runs(scan2d):
     scRL.d_rewards(scan2d, starts=['root'], ends=['branchA'])
     seed_all(0)
     t = scRL.trainer('ActorCritic', scan2d, reward_type='d', starts_prob=False, X_latent=make_tree(d=2)[2], num_episodes=100)

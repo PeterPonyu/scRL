@@ -101,6 +101,8 @@ def plot_grids(gres, key=None, cells=False, dims=(0, 1, 2), view=(22, -58), ax=N
     if ax is None:
         fig = plt.figure(figsize=(6, 5) if three else (5, 5))
         ax = fig.add_subplot(projection='3d' if three else None)
+    elif three and ax.name != '3d':
+        raise ValueError(f'A {ndim}-D grid needs a 3-D axes, for example fig.add_subplot(projection=\'3d\').')
     if s is None:
         s = 4 if cells else (8 if three else 12)
     mappable = None

@@ -23,12 +23,12 @@ def test_3d_defaults(tree3d):
     assert g['core'].sum() <= len(g['mapped_travel'])
 
 
-def test_2d_default_is_the_v1_scan(tree2d):
+def test_2d_default_is_the_2d_scan(tree2d):
     gres = scRL.grids_from_embedding(tree2d[0], n=20, n_jobs=1)
     assert not is_nd(gres) and gres.grids['n'] == 20 and 'method' not in gres.grids
 
 
-def test_2d_occupancy_uses_the_8_v1_moves(tree2d):
+def test_2d_occupancy_uses_the_8_scan_moves(tree2d):
     g = scRL.grids_from_embedding(tree2d[0], method='occupancy').grids
     assert g['ndim'] == 2 and g['n'] == 50 and g['actions'] == ['R', 'RT', 'T', 'LT', 'L', 'LB', 'B', 'RB']
 
@@ -41,6 +41,12 @@ def test_4d_and_5d_build(d, n_moves):
 
 def test_full_moves_in_3d(tree3d):
     assert len(scRL.grids_from_embedding(tree3d[0], moves='full').grids['actions']) == 26
+
+
+def test_full_moves_in_4d_warn():
+    with pytest.warns(UserWarning, match='80 moves'):
+        g = scRL.grids_from_embedding(make_tree(d=4)[0], moves='full').grids
+    assert len(g['actions']) == 80
 
 
 def test_bad_inputs_raise(tree3d, tree2d):

@@ -3,7 +3,7 @@ from scRL.GridCore import Grids_Results
 from scRL.GridNDCore import make_offsets, attach_lattice, lattice_from_scan, is_nd
 
 
-def test_offsets_2d_full_match_v1_order():
+def test_offsets_2d_full_match_2d_code_order():
     offs, names = make_offsets(2, 'full')
     assert names == ['R', 'RT', 'T', 'LT', 'L', 'LB', 'B', 'RB']
     assert offs.tolist() == [[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1]]
@@ -49,7 +49,7 @@ def test_only_the_centre_of_a_3x3x3_block_is_travel():
         assert g.grids['mapped_adj'].shape == (27, 27) and is_nd(g)
 
 
-def test_lattice_from_scan_matches_v1(scan2d):
+def test_lattice_from_scan_matches_2d_code(scan2d):
     nd = lattice_from_scan(scan2d)
     assert np.array_equal(nd.grids['mapped_grids'], scan2d.grids['mapped_grids'])
     assert set(nd.grids['mapped_boundary']) == set(scan2d.grids['mapped_boundary'])

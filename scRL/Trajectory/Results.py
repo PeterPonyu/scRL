@@ -62,9 +62,15 @@ def traj_results(gres, lineages, key, points=False, multiple=False):
 
 
 def _traj_results_3d(gres, mask, key, points, multiple):
-    """3-D view for ``traj_results``, drawn on the first three axes of the embedding in a new figure."""
+    """
+    3-D view for ``traj_results`` on the first three axes of the embedding. With ``multiple`` the current
+    3-D axes is reused so several lineages can be overlaid; otherwise a new figure is made.
+    """
     X = gres.embedding['embedding'][:, :3]
-    ax = plt.figure(figsize=(6, 5)).add_subplot(projection='3d')
+    if multiple and plt.get_fignums() and plt.gcf().axes and plt.gca().name == '3d':
+        ax = plt.gca()
+    else:
+        ax = plt.figure(figsize=(6, 5)).add_subplot(projection='3d')
     if not multiple:
         ax.scatter(*X.T, c='lightgrey', s=4, lw=0)
         ax.scatter(*X[mask].T, c=gres.embedding['cluster_colors'][mask], s=4, lw=0)

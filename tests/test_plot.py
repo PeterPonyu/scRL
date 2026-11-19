@@ -34,6 +34,24 @@ def test_2d_scan_result_and_4d(scan2d):
     assert scRL.plot_grids(_gres(4), key='pseudotime', dims=(0, 1, 3)).name == '3d'
 
 
+def test_2d_axes_for_a_3d_grid_raise():
+    import matplotlib.pyplot as plt
+    ax = plt.figure().add_subplot()
+    with pytest.raises(ValueError, match='3-D axes'):
+        scRL.plot_grids(_gres(3), key='pseudotime', ax=ax)
+
+
+def test_array_in_stored_order_matches_series(scan2d):
+    scan2d.grids['pt_array'] = np.asarray(scan2d.grids['pseudotime'])
+    a = scRL.plot_grids(scan2d, key='pseudotime').collections[0]
+    b = scRL.plot_grids(scan2d, key='pt_array').collections[0]
+    a.figure.canvas.draw(); b.figure.canvas.draw()
+    assert len(a.get_offsets()) == len(scan2d.grids['mapped_travel'])
+    np.testing.assert_array_equal(a.get_offsets(), b.get_offsets())
+    np.testing.assert_array_equal(a.get_array(), b.get_array())
+    np.testing.assert_array_equal(a.get_facecolors(), b.get_facecolors())
+
+
 def test_interactive():
     pytest.importorskip('plotly')
     fig = scRL.plot_grids(_gres(3), key='pseudotime', interactive=True)

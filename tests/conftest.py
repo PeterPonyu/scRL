@@ -65,13 +65,13 @@ def _scan50():
 
 @pytest.fixture
 def scan2d(_scan20):
-    """v1 2-D scan result (n=20) with clusters, pseudotime and projected genes. Fresh copy per test."""
+    """2-D scan grid result (n=20) with clusters, pseudotime and projected genes. Fresh copy per test."""
     return copy.deepcopy(_scan20)
 
 
 @pytest.fixture
 def scan2d_n50(_scan50):
-    """Same with n=50 (the only grid width the v1 tabular environment handles)."""
+    """Same with n=50 (the only grid width the 2-D tabular environment handles)."""
     return copy.deepcopy(_scan50)
 
 

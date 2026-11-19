@@ -2,10 +2,11 @@
 
 A grid is a regular lattice described by a neighbour table: for every kept grid point and every move, the
 position of the grid point reached by that move, or -1 when the move leaves the kept grid. Grid points are
-indexed in C order (``np.ravel_multi_index``), which in 2-D equals the v1 index ``i + j * n``.
+indexed in C order (``np.ravel_multi_index``), which in 2-D equals the index ``i + j * n`` of the 2-D scan grid.
 """
 import copy
 import itertools
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -13,8 +14,8 @@ from scipy import ndimage, sparse
 from scipy.sparse.csgraph import connected_components, dijkstra
 from scipy.spatial import cKDTree
 
-V1_ACTIONS_2D = ['R', 'RT', 'T', 'LT', 'L', 'LB', 'B', 'RB']
-V1_OFFSETS_2D = [(1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1), (0, -1), (1, -1)]
+ACTIONS_2D = ['R', 'RT', 'T', 'LT', 'L', 'LB', 'B', 'RB']
+OFFSETS_2D = [(1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1), (0, -1), (1, -1)]
 DEFAULT_N = {2: 50, 3: 30, 4: 16, 5: 12}
 DEFAULT_RADIUS = {2: 1.0, 3: 1.0, 4: 1.5, 5: 2.0}
 MAX_LATTICE_POINTS = 5_000_000
@@ -30,7 +31,7 @@ def make_offsets(ndim, moves):
         Number of grid dimensions.
     moves
         'axis' (one step along a single axis, 2 * ndim moves) or
-        'full' (every combination of -1, 0, +1 except standing still; the 8 v1 moves in 2-D).
+        'full' (every combination of -1, 0, +1 except standing still; the 8 moves of the 2-D scan grid in 2-D).
 
     Returns
     ----------
@@ -38,7 +39,7 @@ def make_offsets(ndim, moves):
     """
     if moves == 'full':
         if ndim == 2:
-            return np.array(V1_OFFSETS_2D, dtype=np.int64), list(V1_ACTIONS_2D)
+            return np.array(OFFSETS_2D, dtype=np.int64), list(ACTIONS_2D)
         offs = [o for o in itertools.product((-1, 0, 1), repeat=ndim) if any(o)]
         names = [''.join('-0+'[v + 1] for v in o) for o in offs]
         return np.array(offs, dtype=np.int64), names
@@ -78,6 +79,9 @@ def attach_lattice(gres, shape, moves):
     shape = tuple(int(s) for s in shape)
     mapped = np.asarray(gres.grids['mapped_grids'], dtype=np.int64)
     offsets, names = make_offsets(len(shape), moves)
+    if moves == 'full' and len(shape) >= 4:
+        warnings.warn(f'moves="full" gives {len(offsets)} moves per grid point in {len(shape)}-D; the neighbour '
+                      f'table and reward tables may be large.', UserWarning)
     M = len(mapped)
     pos = np.full(int(np.prod(shape)), -1, dtype=np.int64)
     pos[mapped] = np.arange(M)
@@ -104,9 +108,9 @@ def attach_lattice(gres, shape, moves):
 
 def lattice_from_scan(gres):
     """
-    Copy a v1 2-D scan result and attach the n-D lattice to the copy.
+    Copy a 2-D scan grid result and attach the n-D lattice to the copy.
 
-    The kept grid points and their stored order are unchanged, so the n-D functions can be run on a v1 grid.
+    The kept grid points and their stored order are unchanged, so the n-D functions can be run on a 2-D scan grid.
 
     Parameters
     ----------
@@ -266,14 +270,38 @@ def project_cluster_nd(gres, clusters=None, cluster_colors=None):
     gres.grids['mapped_grids_colors'] = np.array([color_lut[i] for i in mapped_grids_clusters])
 
 
+def _closest_pair(gres, tree, in_main, in_other):
+    """
+    Positions (main, other) of the closest pair of grid points between two parts of the grid.
+
+    Candidate pairs near the minimum distance are found with the tree; their distances are then computed on
+    the stored grid coordinates and the exact minimum is kept. Ties are broken by the smallest grid index of
+    the main-part point, then of its partner.
+    """
+    G = gres.grids['grids']
+    mapped = np.asarray(gres.grids['mapped_grids'])
+    points = G[mapped]
+    dist, _ = tree.query(points[in_other], k=1)
+    reach = dist.min() * (1 + 1e-7) + 1e-12
+    others = in_other[dist <= reach]
+    mains = np.unique(np.concatenate([in_main[np.asarray(i, dtype=np.int64)]
+                                      for i in tree.query_ball_point(points[others], reach)]))
+    D = np.vstack([np.linalg.norm(G[mapped[m]] - G[mapped[others]], axis=1) for m in mains])
+    rows, cols = np.nonzero(D == D.min())
+    k = np.lexsort((mapped[others[cols]], mapped[mains[rows]]))[0]
+    return mains[rows[k]], others[cols[k]]
+
+
 def align_pseudotime_nd(gres, early_cluster, n_sample_cells=10, key_add='pseudotime', boundary=True,
                         early_cell=None):
     """
     n-D version of ``align_pseudotime``.
 
     Pseudotime is the mean number of grid steps from start points sampled in the early cluster, min-max
-    scaled. When the grid has several connected parts, the part holding most sampled start points is used
-    and every other part is attached at its grid point nearest to that part.
+    scaled. When the grid has several connected parts, the part holding most sampled start points is the
+    main part (on equal counts, the part holding the start point with the smallest grid index), and each other part is attached at its grid point nearest to the main part, continuing the
+    pseudotime of the main-part grid point it is nearest to. Ties between equally near pairs are broken by
+    the smallest grid index (of the main-part point, then of its partner).
     """
     mapped_grids = np.asarray(gres.grids['mapped_grids'])
     mapped_grids_clusters = np.asarray(gres.grids['mapped_grids_clusters'])
@@ -297,7 +325,9 @@ def align_pseudotime_nd(gres, early_cluster, n_sample_cells=10, key_add='pseudot
     else:
         print(f'Warning: The grid graph has {n_parts} components; the component holding most start points is '
               f'used for pseudo-time aligning and the others are attached at their nearest grid point')
-        main = np.bincount(part[starts], minlength=n_parts).argmax()
+        counts = np.bincount(part[starts], minlength=n_parts)
+        tied = np.isin(part[starts], np.flatnonzero(counts == counts.max()))
+        main = part[starts[tied][np.argmin(mapped_grids[starts[tied]])]]
         t = dijkstra(adj, directed=False, indices=np.unique(starts[part[starts] == main])).mean(0)
         in_main = np.flatnonzero(part == main)
         tree = cKDTree(points[in_main])
@@ -305,9 +335,8 @@ def align_pseudotime_nd(gres, early_cluster, n_sample_cells=10, key_add='pseudot
             if c == main:
                 continue
             in_c = np.flatnonzero(part == c)
-            dist, nn = tree.query(points[in_c], k=1)
-            k = dist.argmin()
-            t[in_c] = dijkstra(adj, directed=False, indices=in_c[k])[in_c] + t[in_main[nn[k]]]
+            m, o = _closest_pair(gres, tree, in_main, in_c)
+            t[in_c] = dijkstra(adj, directed=False, indices=o)[in_c] + t[m]
     t = (t - t.min()) / (t.max() - t.min())
     gres.grids[key_add] = pd.Series(t, index=mapped_grids)
 
@@ -353,5 +382,6 @@ def project_nd(gres, data, neighbors=15):
 def get_state_nd(gres, X, KNN=10):
     """Latent vectors of the KNN cells nearest to each kept grid point, (grid points, KNN, latent), mapped order."""
     points = gres.grids['grids'][gres.grids['mapped_grids']]
-    _, nn = cKDTree(gres.embedding['embedding']).query(points, k=KNN)
-    return np.asarray(X)[nn.reshape(len(points), KNN)]
+    k = min(KNN, len(gres.embedding['embedding']))
+    _, nn = cKDTree(gres.embedding['embedding']).query(points, k=k)
+    return np.asarray(X)[nn.reshape(len(points), k)]
