@@ -66,3 +66,43 @@ def test_2d_trajectory_is_unchanged(scan2d):
         if any(mask):
             expected.append(grids[idx[mask], :].mean(axis=0))
     np.testing.assert_array_equal(scan2d.trajectory['tr_traj'], np.vstack(expected))
+
+
+def _legend_inside(fig):
+    from test_plot import _text_boxes
+    legend = [ax.get_legend() for ax in fig.axes if ax.get_legend()][0]
+    box = legend.get_window_extent(fig.canvas.get_renderer())
+    W, H = fig.canvas.get_width_height()
+    assert box.x0 >= 0 and box.y0 >= 0 and box.x1 <= W and box.y1 <= H, f'legend is cut off: {box}'
+    for text, b in _text_boxes(fig):
+        assert not box.overlaps(b), f'legend overlaps {text!r}'
+
+
+def test_3d_trajectory_figure():
+    import matplotlib.pyplot as plt
+    from test_plot import _assert_layout
+    X, labels, Z, _ = make_tree(d=3)
+    gres = scRL.grids_from_embedding(X)
+    scRL.project_cluster(gres, pd.Series(pd.Categorical(labels)))
+    seed_all(0); scRL.align_pseudotime(gres, 'root', boundary=False)
+    t = _train(gres, Z)
+    seed_all(1)
+    scRL.get_traj_df(gres, t, n=50, key='tr')
+    plt.close('all')
+    for points, label in ((False, 'Along the path'), (True, 'Step')):
+        scRL.traj_results(gres, ['trunk', 'branchA'], 'tr', points=points)
+        fig = plt.gcf()
+        (ax,) = [a for a in fig.axes if a.name == '3d']
+        assert [ax.get_xlabel(), ax.get_ylabel(), ax.get_zlabel()] == ['Dim 1', 'Dim 2', 'Dim 3']
+        (bar,) = [a for a in fig.axes if a.get_label() == '<colorbar>']
+        assert bar.get_ylabel() == label
+        assert [t.get_text() for t in ax.get_legend().get_texts()] == ['branchA', 'trunk']
+        _assert_layout(fig)
+        _legend_inside(fig)
+    scRL.traj_results(gres, ['trunk', 'branchA'], 'tr')
+    fig = plt.gcf()
+    assert [t.get_text() for t in fig.axes[1].get_yticklabels()] == ['start', 'end']
+    n_figs, n_axes = len(plt.get_fignums()), len(fig.axes)
+    scRL.traj_results(gres, ['branchB'], 'tr', multiple=True)
+    assert len(plt.get_fignums()) == n_figs and plt.gcf() is fig and len(fig.axes) == n_axes
+    plt.close('all')

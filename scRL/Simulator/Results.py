@@ -3,6 +3,7 @@ import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 import matplotlib as mpl
+from matplotlib.lines import Line2D
 from sklearn.preprocessing import KBinsDiscretizer
 
 def sim_results(gres, n_sample=3000, traj=None, sim_traj=False, prefix=None):
@@ -140,38 +141,43 @@ def sim_results(gres, n_sample=3000, traj=None, sim_traj=False, prefix=None):
 
 
 def _sim_results_3d(gres, df_coord1, df_time1, df_type1, traj, sim_traj, prefix):
-    """``sim_results`` for 3-D and higher embeddings: the same figures on 3-D axes (first three coordinates)."""
+    """
+    ``sim_results`` for 3-D and higher embeddings: the same files, drawn on the first three coordinates in the
+    style of the ``PlotCore`` views, every step in the frame of the embedding.
+    """
     import os
+    from ..PlotCore import GREY, _cluster_order
+    from ..Trajectory.Results import (_figure_3d, _frame_3d, _legend_3d, _colorbar_3d, _cluster_handles,
+                                      _cluster_context_3d, _path_3d)
     os.makedirs('sim_output', exist_ok=True)
-    X = gres.embedding['embedding'][:, :3]
-    lut = dict(zip(gres.embedding['clusters'], gres.embedding['cluster_colors']))
+    X = np.asarray(gres.embedding['embedding'])[:, :3]
+    clusters = np.asarray(gres.embedding['clusters'])
+    order = _cluster_order(gres)
+    lut = dict(zip(clusters, gres.embedding['cluster_colors']))
     lineages = gres.simulating[f'{prefix}_lineages']
     mask = np.asarray(gres.embedding['clusters'].isin(lineages))
     cols = ['c1', 'c2', 'c3']
-
-    def new_axes():
-        ax = plt.figure(figsize=(5, 5)).add_subplot(projection='3d')
-        ax.set_xticklabels([])
-        ax.set_yticklabels([])
-        ax.set_zticklabels([])
-        return ax
 
     if traj:
         from ..Trajectory.Results import traj_results
         traj_results(gres, lineages, traj)
     else:
-        ax = new_axes()
-        ax.scatter(*X.T, color='lightgrey', s=4, lw=0)
-        ax.scatter(*X[mask].T, c=gres.embedding['cluster_colors'][mask], s=4, lw=0)
+        handles = _cluster_handles(gres, mask)
+        fig, ax, x = _figure_3d(handles)
+        _cluster_context_3d(ax, gres, mask)
+        _frame_3d(ax, X)
+        _legend_3d(ax, handles, x)
     plt.savefig('sim_output/lineages.png', dpi=600, bbox_inches='tight')
 
-    ax = new_axes()
-    ax.scatter(*X.T, color='lightgrey', s=4, lw=0)
-    ax.scatter(*X[mask].T, c=np.asarray(gres.embedding['pseudotime'])[mask], cmap='viridis', s=4, lw=0)
+    fig, ax, x = _figure_3d()
+    ax.scatter(*X.T, color=GREY, s=2, lw=0, alpha=.5, depthshade=False)
+    points = ax.scatter(*X[mask].T, c=np.asarray(gres.embedding['pseudotime'])[mask], cmap='viridis', s=4, lw=0,
+                        depthshade=False)
+    _frame_3d(ax, X)
+    _colorbar_3d(ax, points, 'Pseudotime', x)
     plt.savefig('sim_output/pseudotime.png', dpi=600, bbox_inches='tight')
 
     coords = df_coord1[cols].to_numpy()
-    limits = list(zip(coords.min(0), coords.max(0)))
     if sim_traj:
         df_coord = gres.simulating[f'{prefix}_df_coord'].copy()
         df_time = gres.simulating[f'{prefix}_df_time'].copy()
@@ -181,30 +187,39 @@ def _sim_results_3d(gres, df_coord1, df_time1, df_type1, traj, sim_traj, prefix)
         sim_traj_df = df_coord[df_coord['bins'] <= df_coord['steps']].groupby('bins').apply(lambda x : x.mean() if x.shape[0] > .2 * start_num else None).dropna()
         gres.simulating[f'{prefix}_df_traj'] = sim_traj_df
         path = sim_traj_df[cols].to_numpy()
-        colors = mpl.cm.rainbow(np.linspace(0, 1, len(path)))
 
-    def draw(ax):
-        ax.set_xlim(limits[0])
-        ax.set_ylim(limits[1])
-        ax.set_zlim(limits[2])
-        if sim_traj:
-            for i in range(len(path) - 1):
-                ax.quiver(*path[i], *(path[i + 1] - path[i]), color=colors[i], lw=2, arrow_length_ratio=.3)
+    def finish(ax, t):
+        _frame_3d(ax, X)
+        if sim_traj and len(path) > 1:
+            _path_3d(ax, path)
+        ax.set_title(f'Simulated cells up to step {int(t)}')
 
     steps = gres.simulating[f'{prefix}_steps']
     for t in [steps*.2, steps*.4, steps*.6, steps*.8, steps]:
         idx1 = df_time1.index < t
-        ax = new_axes()
-        ax.scatter(*coords[idx1].T, c=[lut[c] for c in df_type1['Type'][idx1]], s=4, lw=0)
-        draw(ax)
+        types = np.asarray(df_type1['Type'][idx1])
+        present = [c for c in order if c in set(types)]
+        handles = [Line2D([], [], ls='', marker='o', color=lut[c], label=str(c)) for c in present]
+        fig, ax, x = _figure_3d(handles)
+        ax.scatter(*X.T, color=GREY, s=2, lw=0, alpha=.2, depthshade=False, zorder=1)
+        ax.scatter(*coords[idx1].T, c=[lut[c] for c in types], s=4, lw=0, depthshade=False, zorder=2)
+        finish(ax, t)
+        if handles:
+            _legend_3d(ax, handles, x)
         plt.savefig(f'sim_output/types_{t}.png', dpi=600, bbox_inches='tight')
-        ax = new_axes()
-        ax.scatter(*coords[idx1].T, c=df_time1['time'][idx1], cmap='viridis', vmax=1, s=4, lw=0)
-        draw(ax)
+
+        fig, ax, x = _figure_3d()
+        points = ax.scatter(*coords[idx1].T, c=df_time1['time'][idx1], cmap='viridis', vmin=0, vmax=1, s=4, lw=0,
+                            depthshade=False, zorder=2)
+        finish(ax, t)
+        _colorbar_3d(ax, points, 'Simulated pseudotime', x)
         plt.savefig(f'sim_output/time_{t}.png', dpi=600, bbox_inches='tight')
-        types, nums = np.unique(df_type1['Type'][idx1], return_counts=True)
+
+        types, nums = np.unique(types, return_counts=True)
         plt.figure(figsize=(5, 5))
-        plt.pie(nums, startangle=90, colors=[lut[c] for c in types], wedgeprops={'lw': 0})
+        wedges, _ = plt.pie(nums, startangle=90, colors=[lut[c] for c in types], wedgeprops={'lw': 0})
+        wedge = dict(zip(types, wedges))
+        plt.legend([wedge[c] for c in present], present, loc='center left', bbox_to_anchor=(1, .5), frameon=False)
         plt.savefig(f'sim_output/pie_{t}.png', dpi=600, bbox_inches='tight')
     return
 
@@ -230,6 +245,8 @@ def sim_results2(gres, lin1, lin2, prefix=None):
     ----------
     None
     """
+    lin1 = [lin1] if isinstance(lin1, str) else lin1
+    lin2 = [lin2] if isinstance(lin2, str) else lin2
     #Save the comparision information 
     gres.simulating[f'{prefix}_lin1'] = lin1
     gres.simulating[f'{prefix}_lin2'] = lin2
