@@ -146,8 +146,15 @@ def test_sac_update_terms_by_hand(monkeypatch):
     batch = {'states': rng.normal(size=(6, 5)), 'actions': np.array([0, 1, 2, 3, 4, 5]),
              'rewards': np.array([1., -2., .5, 0., 3., -1.]), 'next_states': rng.normal(size=(6, 5)),
              'dones': np.array([True, False, False, True, False, False])}
+    with torch.no_grad():                                                  # targets that differ from the online nets
+        for net in (agent.q1_t, agent.q2_t):
+            for param in net.parameters():
+                param.add_(.1)
     before = copy.deepcopy(agent)
     used = agent.update(batch)
+    for target, online, old in ((agent.q1_t, agent.q1, before.q1_t), (agent.q2_t, agent.q2, before.q2_t)):
+        for t_new, o_new, t_old in zip(target.parameters(), online.parameters(), old.parameters()):
+            torch.testing.assert_close(t_new.detach(), (1 - agent.tau) * t_old.detach() + agent.tau * o_new.detach())
     s, s2 = torch.tensor(batch['states'], dtype=torch.float), torch.tensor(batch['next_states'], dtype=torch.float)
     r = torch.tensor(batch['rewards'], dtype=torch.float).view(-1, 1)
     d = torch.tensor(batch['dones'], dtype=torch.float).view(-1, 1)
@@ -157,7 +164,10 @@ def test_sac_update_terms_by_hand(monkeypatch):
         q_target = torch.minimum(before.q1_t(s2), before.q2_t(s2))         # target networks, not the online ones
         v2 = (p2 * (q_target - alpha * torch.log(p2 + 1e-8))).sum(1, keepdim=True)
         y = r + .9 * (1 - d) * v2                                          # no future after a terminal step
+        q_online = torch.minimum(before.q1(s2), before.q2(s2))
+        y_online = r + .9 * (1 - d) * (p2 * (q_online - alpha * torch.log(p2 + 1e-8))).sum(1, keepdim=True)
     torch.testing.assert_close(used['target'], y)
+    assert not torch.allclose(y, y_online)
     assert not torch.allclose(y, r + .9 * v2)
     with torch.no_grad():
         p = before.actor(s)

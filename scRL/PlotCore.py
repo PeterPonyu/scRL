@@ -186,8 +186,8 @@ def _value_limits(layers, vmin=None, vmax=None, vcenter=None, robust=True):
     """
     Colour limits from the finite values drawn. ``robust``: the 1st and 99th percentiles, except on a side where
     no value lies more than 5% of that range beyond the percentile (there the limit stays at the extreme
-    value, so only real outliers are cut off); the full range when the percentiles are less than 1% of it
-    apart (most values equal). Otherwise the range. ``vcenter`` makes the limits symmetric
+    value, so only real outliers are cut off); the full range when the two percentiles are equal (most values
+    equal). Otherwise the range. ``vcenter`` makes the limits symmetric
     about it; explicit limits win.
     """
     finite = _finite(layers)
@@ -196,7 +196,7 @@ def _value_limits(layers, vmin=None, vmax=None, vcenter=None, robust=True):
     lo, hi = finite.min(), finite.max()
     if robust:
         p1, p99 = np.percentile(finite, [1, 99])
-        if p99 - p1 >= .01 * (hi - lo):           # else most values are equal: keep the full range
+        if p99 > p1:                              # else most values are equal: keep the full range
             margin = .05 * (p99 - p1)
             lo = p1 if lo < p1 - margin else lo
             hi = p99 if hi > p99 + margin else hi

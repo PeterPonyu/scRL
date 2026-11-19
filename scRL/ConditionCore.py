@@ -484,7 +484,8 @@ def compare_values(gres, test, reference, ends, starts=None, mode='Decision', be
 def _cluster_table(d, null, clusters, order, spread):
     """
     Per cluster: the median observed difference against the medians of the shuffles in which the cluster has
-    shared points; NaN effect, z and p-value when fewer than half of the shuffles entered.
+    shared points; effect, relative effect, null spread, z and p-value are NaN when fewer than half of the
+    shuffles entered.
     """
     n_shuffles = len(null)
     rows = []

@@ -745,3 +745,22 @@ def test_one_point_trajectory():
     ax = plt.figure().add_subplot(projection='3d')
     _path_3d(ax, np.array([[0., 1., 2.]]))
     assert len(ax.collections) == 1
+
+
+def test_robust_limits_with_one_extreme_value():
+    gres = _gres(3)
+    pos = {g: p for p, g in enumerate(gres.grids['mapped_grids'])}
+    values = np.random.default_rng(0).random(len(gres.grids['mapped_grids']))
+    values[pos[gres.grids['mapped_travel'][0]]] = 1000.0
+    gres.grids['spike'] = values
+    ax = scRL.plot_grids(gres, key='spike')
+    lo, hi = ax.collections[-1].get_clim()
+    assert hi < 2 and ax.collections[-1].colorbar.extend in ('max', 'both')
+
+
+def test_empty_trajectory_draws_nothing():
+    import matplotlib.pyplot as plt
+    from scRL.Trajectory.Results import _path_3d
+    ax = plt.figure().add_subplot(projection='3d')
+    _path_3d(ax, np.zeros((0, 3)))
+    assert not ax.collections and not ax.lines

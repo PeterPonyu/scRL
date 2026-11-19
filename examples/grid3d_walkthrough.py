@@ -134,7 +134,8 @@ with scRL.plot_style():
     print(f'6. trajectory of {len(gres.trajectory["ery_traj"])} averaged steps; simulator figures in '
           f'{out / "sim_output"}')
 
-    # 7. Two conditions on one grid, made from the public data: 'treated' keeps only 15% of the neutrophil cells
+    # 7. Two conditions on one grid, made from the public data: cells go to 'treated' with probability 0.5,
+    #    neutrophil-lineage cells with probability 0.15
     rng = np.random.default_rng(0)
     conditions = np.where(rng.random(len(X3)) < .5, 'treated', 'control')
     neutrophil = clusters.isin(['16Neu', '17Neu']).to_numpy()

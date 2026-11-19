@@ -124,6 +124,8 @@ def _path_3d(ax, path, cmap='rainbow'):
     from mpl_toolkits.mplot3d.art3d import Line3DCollection
     cmap = plt.get_cmap(cmap)
     lw = 2.5
+    if len(path) == 0:
+        return mpl.cm.ScalarMappable(norm=mpl.colors.Normalize(0, 1), cmap=cmap)
     if len(path) < 2:
         ax.scatter(*path[0], color=cmap(0.), s=40, edgecolor='white', lw=1, depthshade=False, zorder=5)
         return mpl.cm.ScalarMappable(norm=mpl.colors.Normalize(0, 1), cmap=cmap)
