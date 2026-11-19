@@ -6,6 +6,9 @@ from .Simulator.Results import sim_results, sim_results2, sim_results3
 from .Trajectory.Core import get_traj_df
 from .Trajectory.Results import traj_results
 from .utils import get_state_value
+from .ExactCore import exact_values
+from .FateCore import fate_gate
+from .EnvironmentNDCore import reachability
 from .PlotCore import (plot_grids, plot_slices, plot_views, plot_trend, plot_clusters, plot_policy,
                        plot_training, plot_projections, plot_report, save_rotation, plot_style)
 
@@ -21,6 +24,7 @@ __all__ = ['grids_from_embedding', 'align_pseudotime', 'project_cluster', 'proje
            , 'get_state_value', 'plot_grids', 'plot_slices', 'plot_views', 'plot_trend'
            , 'plot_clusters', 'plot_policy', 'plot_training'
            , 'plot_projections', 'plot_report', 'save_rotation', 'plot_style'
+           , 'exact_values', 'fate_gate', 'reachability'
            # Backward compatibility
            , 'lineage_rewards', 'gene_rewards', 'project_expression']
 

@@ -245,11 +245,16 @@ def _policy_moves(gres, trainer, travel):
     The move the agent tends to make from each given travel point (flat indices), in embedding units.
 
     ActorCritic and SAC: the expected move, the moves weighted by the actor's probabilities at the grid point's
-    state. DDQN and TabularQ: the move with the largest Q-value.
+    state. DDQN and TabularQ: the move with the largest Q-value. An integer array gives one move index per
+    kept grid point (for example the best moves stored by ``exact_values``).
     """
     import torch
     from .GridNDCore import OFFSETS_2D
     offsets = np.asarray(gres.grids['offsets'] if 'offsets' in gres.grids else OFFSETS_2D, dtype=float)
+    if isinstance(trainer, np.ndarray):
+        if len(trainer) != len(gres.grids['mapped_grids']):
+            raise ValueError('A move array needs one move index per kept grid point.')
+        return offsets[trainer[_positions(gres, travel)].astype(int)] * _lattice_spacing(gres)[0]
     agent = trainer.agent
     if hasattr(agent, 'Q'):
         move = offsets[np.argmax(agent.Q.loc[travel].to_numpy(dtype=float), axis=1)]
@@ -402,8 +407,9 @@ def plot_slices(gres, key=None, axis=2, n_slices=6, cells=False, dims=(0, 1, 2),
         Figure size; the panels are then placed by matplotlib.
         (Default: None, from the number of panels and the data aspect)
     policy
-        A trained ``scRL.trainer``: draw the direction the agent tends to move in, as in ``plot_policy``,
-        at travel points on a regular sub-lattice of the slab. Moves mainly in the plane are drawn as
+        A trained ``scRL.trainer``, or an integer array of move indices (one per kept grid point): draw the
+        direction the agent tends to move in, as in ``plot_policy``, at travel points on a regular sub-lattice
+        of the slab. Moves mainly in the plane are drawn as
         arrows 0.8 sub-lattice steps long; moves mainly across the slab as small open markers, ``^`` towards
         higher and ``v`` towards lower values of the slicing axis.
         (Default: None)
@@ -771,7 +777,8 @@ def plot_policy(gres, trainer, dims=(0, 1, 2), view=(22, -58), ax=None, every=No
     gres
         Grids results.
     trainer
-        A trained ``scRL.trainer``.
+        A trained ``scRL.trainer``, or an integer array with one move index per kept grid point (for example
+        ``gres.grids['exact_<key>_move']``).
     dims
         Embedding axes to draw for 3-D and higher grids.
         (Default: (0, 1, 2))
