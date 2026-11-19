@@ -5,7 +5,8 @@ import torch
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
 def get_state_value(gres, trainer, key):
-    gres.grids[key] = trainer.agent.critic(torch.tensor(trainer.env.state_space.mean(axis=1),dtype=torch.float,device=device)).detach().cpu().numpy().ravel()
+    """Store the value of every kept grid point (``trainer.state_values()``) as ``gres.grids[key]``."""
+    gres.grids[key] = trainer.state_values()
     return 
     
 

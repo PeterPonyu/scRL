@@ -242,7 +242,7 @@ def _policy_moves(gres, trainer, travel):
     """
     The move the agent tends to make from each given travel point (flat indices), in embedding units.
 
-    ActorCritic: the expected move, the moves weighted by the actor's probabilities at the grid point's
+    ActorCritic and SAC: the expected move, the moves weighted by the actor's probabilities at the grid point's
     state. DDQN and TabularQ: the move with the largest Q-value.
     """
     import torch
@@ -572,7 +572,7 @@ def plot_policy(gres, trainer, dims=(0, 1, 2), view=(22, -58), ax=None, every=No
     """
     Arrows showing where the agent tends to move from the travel grid points.
 
-    ActorCritic: the expected move, the moves weighted by the actor's probabilities at the grid point's
+    ActorCritic and SAC: the expected move, the moves weighted by the actor's probabilities at the grid point's
     state. DDQN and TabularQ: the move with the largest Q-value. On 2-D grids the arrows are the moves in
     embedding units; on 3-D and higher grids they show the direction only, each 0.8 grid steps long, over
     small faint grid points coloured by ``key`` (no points when ``key`` is None).

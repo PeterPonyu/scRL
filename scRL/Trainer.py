@@ -3,6 +3,7 @@ import tqdm
 from .EnvironmentCore import deepEnv, replayBuffer
 from .DDQNCore import dqn
 from .ActorCriticCore import actorcritic
+from .SACCore import sac
 from .TabularQCore import tabularQ, tabularEnv
 from .Simulator.Core import simulator
 from .GridNDCore import is_nd
@@ -18,7 +19,10 @@ class trainer:
     ----------
     algo
         Algorithm to train the agent.
-        Three algorithms are included: 'TabularQ', 'ActorCritic', 'DDQN'.
+        Four algorithms are included: 'TabularQ', 'ActorCritic', 'DDQN', 'SAC'.
+        'SAC' is a soft actor-critic for discrete moves (two Q networks, a categorical actor and a learned
+        temperature), trained off-policy from the replay buffer like 'DDQN'. It usually needs fewer episodes
+        than the other agents (a few thousand) but more time per episode.
     gres
         Grids results after all the preprocessings.
     reward_type
@@ -75,8 +79,11 @@ class trainer:
         The actor learning rate for ActorCritic.
         (Default: 5e-4)
     critic_lr
-        The critic learning rate for ActorCritic.
+        The critic learning rate for ActorCritic, and the learning rate of the Q networks for SAC.
         (Default: 1e-3)
+    entropy_frac
+        Target entropy of the SAC actor as a fraction of the largest possible entropy, 0 < entropy_frac <= 1.
+        (Default: .3)
     """
     def __init__(self,
                  algo,
@@ -98,9 +105,12 @@ class trainer:
                  alpha=.5,
                  lr = 1e-3,
                  actor_lr = 5e-4,
-                 critic_lr = 1e-3
+                 critic_lr = 1e-3,
+                 entropy_frac = .3
                 ):
         
+        if algo not in ('TabularQ', 'ActorCritic', 'DDQN', 'SAC'):
+            raise ValueError(f"algo must be one of 'TabularQ', 'ActorCritic', 'DDQN', 'SAC', got {algo!r}")
         self.algo = algo    
         self.num_episodes = num_episodes
         self.gres = gres
@@ -122,6 +132,11 @@ class trainer:
                     self.agent = dqn(state_dim, hidden_dim, n_actions, gamma, lr, soft, target_update, tau)
                 if algo == 'ActorCritic':
                     self.agent = actorcritic(state_dim, hidden_dim, n_actions, gamma, actor_lr, critic_lr)
+                if algo == 'SAC':
+                    self.batch_size = batch_size
+                    self.capacity = capacity
+                    self.agent = sac(state_dim, hidden_dim, n_actions, gamma, actor_lr, critic_lr, tau,
+                                     entropy_frac=entropy_frac)
             else:
                 raise ValueError('Please select a latent space of the data')
         
@@ -132,7 +147,7 @@ class trainer:
                             self.env,
                             self.num_episodes
                            )
-        if self.algo == 'DDQN':
+        if self.algo in ('DDQN', 'SAC'):
             self.memory = replayBuffer(self.capacity)
             return train_off_policy(self.agent,
                                     self.env,
@@ -146,20 +161,29 @@ class trainer:
                                    self.env,
                                    self.num_episodes
                                   )
-    def eval_fate(self,):
+    def state_values(self):
         """
-        Store the value of every kept grid point as ``gres.grids['fate_<reward key>']``.
+        The value of every kept grid point, in stored order.
 
         ActorCritic: the critic's state value. DDQN and TabularQ: the mean over actions of the Q-values of
-        the grid point (for DDQN, the policy network applied to the grid point's state vector).
+        the grid point (for DDQN, the policy network applied to the grid point's state vector; for TabularQ a
+        Series indexed by grid point). SAC: the soft value sum_a pi(a|s) [min Q(s, a) - alpha log pi(a|s)].
+        """
+        if self.algo == 'TabularQ':
+            return self.agent.Q.mean(axis=1)
+        if self.algo == 'SAC':
+            return self.agent.value(self.env.state_space.mean(axis=1)).cpu().numpy()
+        states = torch.tensor(self.env.state_space.mean(axis=1),dtype=torch.float,device=device)
+        if self.algo == 'ActorCritic':
+            return self.agent.critic(states).detach().cpu().numpy().ravel()
+        return self.agent.policy_net(states).mean(dim=1).detach().cpu().numpy()
+
+    def eval_fate(self,):
+        """
+        Store the value of every kept grid point (see ``state_values``) as ``gres.grids['fate_<reward key>']``.
         """
         key = self.gres.qlearning['reward_key']
-        if self.algo == 'ActorCritic':
-            self.gres.grids[f'fate_{key}'] = self.agent.critic(torch.tensor(self.env.state_space.mean(axis=1),dtype=torch.float,device=device)).detach().cpu().numpy().ravel()
-        elif self.algo == 'DDQN':
-            self.gres.grids[f'fate_{key}'] = self.agent.policy_net(torch.tensor(self.env.state_space.mean(axis=1),dtype=torch.float,device=device)).mean(dim=1).detach().cpu().numpy()
-        else:
-            self.gres.grids[f'fate_{key}'] = self.agent.Q.mean(axis=1)
+        self.gres.grids[f'fate_{key}'] = self.state_values()
     
     def train_simulator(self, num_episodes, latent_dim):
         agent = self.agent
