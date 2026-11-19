@@ -165,9 +165,9 @@ class trainer:
         """
         The value of every kept grid point, in stored order.
 
-        ActorCritic: the critic's state value. DDQN and TabularQ: the mean over actions of the Q-values of
-        the grid point (for DDQN, the policy network applied to the grid point's state vector; for TabularQ a
-        Series indexed by grid point). SAC: the soft value sum_a pi(a|s) [min Q(s, a) - alpha log pi(a|s)].
+        ActorCritic: the critic's state value. DDQN: the largest Q-value over moves (the policy network applied
+        to the grid point's state vector). TabularQ: the mean over moves of the Q-values (a Series indexed by
+        grid point). SAC: the soft value sum_a pi(a|s) [min Q(s, a) - alpha log pi(a|s)].
         """
         if self.algo == 'TabularQ':
             return self.agent.Q.mean(axis=1)
@@ -176,7 +176,7 @@ class trainer:
         states = torch.tensor(self.env.state_space.mean(axis=1),dtype=torch.float,device=device)
         if self.algo == 'ActorCritic':
             return self.agent.critic(states).detach().cpu().numpy().ravel()
-        return self.agent.policy_net(states).mean(dim=1).detach().cpu().numpy()
+        return self.agent.policy_net(states).max(dim=1).values.detach().cpu().numpy()
 
     def eval_fate(self,):
         """

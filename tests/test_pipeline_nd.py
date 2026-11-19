@@ -28,7 +28,7 @@ def test_three_agents_train_in_3d(algo):
 
 
 @pytest.mark.parametrize('d', [2, 3])
-def test_ddqn_fate_is_the_mean_q_value(d, scan2d):
+def test_ddqn_fate_is_the_largest_q_value(d, scan2d):
     import torch
     if d == 2:
         gres, Z = scan2d, make_tree(d=2)[2]
@@ -43,7 +43,7 @@ def test_ddqn_fate_is_the_mean_q_value(d, scan2d):
     assert fate.shape == (len(gres.grids['mapped_grids']),) and np.isfinite(fate).all()
     net = t.agent.policy_net
     states = torch.tensor(t.env.state_space.mean(axis=1), device=next(net.parameters()).device)
-    expected = net(states).mean(dim=1).detach().cpu().numpy()
+    expected = net(states).max(dim=1).values.detach().cpu().numpy()
     np.testing.assert_allclose(fate, expected, rtol=0, atol=1e-6)
 
 
