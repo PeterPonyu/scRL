@@ -155,7 +155,7 @@ scRL.fate_gate(gres, ['exact_0', 'exact_3'], names=['lineage 0', 'lineage 3'])
 scRL.plot_fates(gres)
 ```
 
-`scRL.fate_probabilities(gres, {'lineage 0': '0', 'lineage 3': '3'})` gives instead, for every grid point, the probability that a walk on the grid reaches each lineage first; the shares sum to one and are drawn with `scRL.plot_fates(gres, key_add='fate')`.
+`scRL.fate_probabilities(gres, {'lineage 0': '0', 'lineage 3': '3'})` gives instead, for every grid point, the share of walks on the grid that enter each lineage first within a fixed number of moves (walks that arrive at no listed lineage are counted as 'none'), drawn with `scRL.plot_fates(gres, key_add='fate')`.
 
 ## Comparing conditions
 

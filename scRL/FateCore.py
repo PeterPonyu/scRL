@@ -2,7 +2,6 @@
 import numpy as np
 import pandas as pd
 from scipy import sparse
-from scipy.sparse.linalg import splu
 from scipy.stats import rankdata
 
 
@@ -32,7 +31,7 @@ def _summaries(W, names):
     return top, entropy
 
 
-RESERVED = ('top', 'entropy', 'none')
+RESERVED = ('top', 'entropy', 'none', 'reached')
 
 
 def _check_names(names):
@@ -126,21 +125,22 @@ def fate_gate(gres, keys, names=None, tau=.1, key_add='gate'):
     return _store_weights(gres, W, names, key_add)
 
 
-def fate_probabilities(gres, ends, forward=1.0, policy=None, key_add='fate'):
+def fate_probabilities(gres, ends, forward=1.0, steps=1000, policy=None, key_add='fate', min_reached=.5):
     """
-    For every kept grid point, the probability that a walk starting there enters the end points of each
-    lineage before those of any other lineage.
+    For every kept grid point, the share of walks starting there that enter the end points of each lineage
+    first, within ``steps`` moves.
 
     The walk moves from a grid point to a neighbouring kept point with weight
     exp(forward * (t_q - t_p) / dt), t being pseudotime and dt the median pseudotime difference of a move, so
     ``forward`` biases the walk toward later pseudotime independently of the pseudotime scale (``forward=0``:
-    the unbiased walk). With ``policy`` the move probabilities come from an array or from the actor of a
-    trained learner instead. The end points of a lineage (the grid points labelled with its clusters) absorb
-    the walk. Moves a million times less likely than the most likely move from a grid point count as
-    impossible. Grid points from which no end point can then be reached get no shares (NaN), and the walk
-    never steps onto them. Solved exactly with one sparse factorisation; the solution is checked (shares in
-    [0, 1], summing to 1) and a ``RuntimeError`` is raised rather than returning shares that fail the check,
-    which can happen when the walk is very strongly biased.
+    the unbiased walk). With ``policy`` the move probabilities come from an array or from the actor of a trained
+    learner instead. The end points of a lineage (the grid points labelled with its clusters) absorb the walk.
+    The shares are not renormalised: a grid point's shares sum to the share of its walks that arrive at any
+    listed lineage within ``steps`` moves (stored as ``<key_add>_reached``). A region whose walks do not arrive,
+    for example a tip that is not among the listed lineages, therefore gets low shares and ``'none'`` as
+    heaviest lineage. ``steps`` bounds the walk: an unbiased walk on a large grid may need more moves (look at
+    ``<key_add>_reached``). At early grid points the split among lineages depends on ``forward`` and on which
+    clusters are given as the ends of each lineage.
 
     Parameters
     ----------
@@ -152,25 +152,35 @@ def fate_probabilities(gres, ends, forward=1.0, policy=None, key_add='fate'):
     forward
         Bias of the walk toward later pseudotime.
         (Default: 1.0)
+    steps
+        Number of moves within which a walk must arrive.
+        (Default: 1000)
     policy
-        Move probabilities instead of the walk: an array (kept grid points x moves; rows need not be
-        normalised, moves off the grid are ignored), or a trained ``scRL.trainer`` with an actor ('ActorCritic',
-        'SAC').
+        Move probabilities instead of the walk: an array (kept grid points x moves; finite and not negative;
+        rows need not be normalised, moves off the grid are ignored, a row of zeros means the walk stops
+        there), or a trained
+        ``scRL.trainer`` with an actor ('ActorCritic', 'SAC').
         (Default: None)
     key_add
         Prefix of the stored results.
         (Default: 'fate')
+    min_reached
+        Share of arriving walks below which a grid point (or cell) has no heaviest lineage ('none') and no
+        entropy (NaN).
+        (Default: .5)
 
     Returns
     ----------
-    DataFrame of the shares (index kept grid indices, one column per lineage), stored as ``fate_gate`` stores
-    its weights (``<key_add>``, ``<key_add>_<name>``, ``<key_add>_top`` with 'none' where there are no shares,
-    ``<key_add>_entropy``, ``<key_add>_top_colors``, and the same for the cells), so that ``plot_fates`` and
-    ``compare_fates`` read either.
+    DataFrame of the shares (index kept grid indices, one column per lineage). Stored on the grid: the table
+    ``<key_add>``, ``<key_add>_<name>``, ``<key_add>_reached``, ``<key_add>_top``, ``<key_add>_entropy`` (of the
+    shares renormalised over the lineages) and ``<key_add>_top_colors``; the same for the cells, brought back
+    with the kernel of ``project_back``. ``plot_fates`` and ``compare_fates`` read them.
     """
     from .GridNDCore import check_labels, is_nd, lattice_from_scan
     if not isinstance(ends, dict) or len(ends) < 2:
         raise ValueError('ends must be a dict of at least two lineages: name -> cluster name(s).')
+    if steps < 1:
+        raise ValueError('steps must be at least 1.')
     names = [str(n) for n in ends]
     _check_names(names)
     lineage_clusters = {n: [c] if np.isscalar(c) else list(c) for n, c in zip(names, ends.values())}
@@ -200,35 +210,58 @@ def fate_probabilities(gres, ends, forward=1.0, policy=None, key_add='fate'):
             w = np.exp(forward * diff / dt)
     else:
         w = _policy_weights(gres, policy, nb)[rows, cols]
-    row_max = np.zeros(M)
-    np.maximum.at(row_max, rows, w)
-    keep = w >= 1e-6 * row_max[rows]
-    rows, q, w = rows[keep], q[keep], w[keep]
     W = sparse.csr_matrix((w, (rows, q)), shape=(M, M))
-    reach = owner >= 0
-    while True:
-        grown = reach | (np.asarray((W > 0) @ reach.astype(float)).ravel() > 0)
-        if (grown == reach).all():
-            break
-        reach = grown
-    Wr = W.multiply(reach[None, :]).tocsr()
-    P = sparse.diags(1 / np.maximum(np.asarray(Wr.sum(1)).ravel(), 1e-300)) @ Wr
-    free = (owner < 0) & reach
-    H = np.full((M, len(names)), np.nan)
+    total = np.asarray(W.sum(1)).ravel()
+    P = (sparse.diags(np.where(total > 0, 1 / np.where(total > 0, total, 1), 0)) @ W).tocsr()
+    free = owner < 0
+    P_ff = P[free][:, free].tocsr()
+    B = np.column_stack([np.asarray(P[free][:, owner == i].sum(1)).ravel() for i in range(len(names))])
+    H_free = np.zeros_like(B)
+    for _ in range(int(steps)):
+        H_free = P_ff @ H_free + B
+    H = np.zeros((M, len(names)))
+    H[free] = H_free
     for i in range(len(names)):
-        H[owner >= 0, i] = (owner[owner >= 0] == i).astype(float)
-    if free.any():
-        P_free = P[free][:, free].tocsc()
-        lu = splu((sparse.eye(free.sum(), format='csc') - P_free).tocsc())
-        for i in range(len(names)):
-            H[free, i] = lu.solve(np.asarray(P[free][:, owner == i].sum(1)).ravel())
-        solved = H[free]
-        if (np.abs(solved.sum(1) - 1).max() > 1e-6 or solved.min() < -1e-9 or solved.max() > 1 + 1e-9
-                or not np.isfinite(solved).all()):
-            raise RuntimeError('The walk is too strongly biased for a stable solution (some grid points almost '
-                               'never leave each other); use a smaller forward.')
-        H[free] = np.clip(solved, 0, 1)
-    return _store_weights(gres, H, names, key_add)
+        H[owner == i, i] = 1.0
+    return _store_shares(gres, H, names, key_add, min_reached)
+
+
+def _store_shares(gres, H, names, key_add, min_reached):
+    """Store lineage shares that need not sum to one, with the share of arriving walks, on the grid and cells."""
+    from matplotlib.colors import to_hex
+    import matplotlib.pyplot as plt
+    from .GridCore import project_back
+    colors = {n: to_hex(plt.get_cmap('tab10')(i % 10)) for i, n in enumerate(names)}
+    colors['none'] = '#d9d9d9'
+
+    def summaries(S):
+        reached = S.sum(1)
+        top = np.asarray(names, dtype=object)[S.argmax(1)].astype(str).astype(object)
+        low = reached < min_reached
+        top[low] = 'none'
+        with np.errstate(divide='ignore', invalid='ignore'):
+            R = S / reached[:, None]
+            entropy = -np.where(R > 0, R * np.log(R), 0).sum(1) / np.log(S.shape[1])
+        entropy[low] = np.nan
+        return reached, top, entropy
+
+    table = pd.DataFrame(H, index=list(gres.grids['mapped_grids']), columns=names)
+    for i, n in enumerate(names):
+        gres.grids[f'{key_add}_{n}'] = H[:, i]
+        project_back(gres, f'{key_add}_{n}', negative=True)
+    gres.grids[key_add] = table
+    gres.grids[f'{key_add}_reached'], gres.grids[f'{key_add}_top'], gres.grids[f'{key_add}_entropy'] = summaries(H)
+    gres.grids[f'{key_add}_top_colors'] = colors
+    C = np.clip(np.column_stack([gres.embedding[f'{key_add}_{n}'] for n in names]), 0, 1)
+    over = C.sum(1, keepdims=True)
+    C = np.where(over > 1, C / np.where(over > 1, over, 1), C)        # the kernel average cannot exceed 1 in theory
+    for i, n in enumerate(names):
+        gres.embedding[f'{key_add}_{n}'] = C[:, i]
+    reached, top, entropy = summaries(C)
+    gres.embedding[f'{key_add}_reached'], gres.embedding[f'{key_add}_top'] = reached, top
+    gres.embedding[f'{key_add}_entropy'] = entropy
+    gres.embedding[f'{key_add}_top_colors'] = dict(colors)
+    return table
 
 
 def _policy_weights(gres, policy, nb):
@@ -238,6 +271,8 @@ def _policy_weights(gres, policy, nb):
         if weights.shape != nb.shape:
             raise ValueError(f'policy has shape {weights.shape}; it needs one row per kept grid point and one '
                              f'column per move {nb.shape}.')
+        if not np.isfinite(weights).all() or (weights < 0).any():
+            raise ValueError('policy weights must be finite and not negative (a row of zeros stops the walk).')
         return weights
     agent = getattr(policy, 'agent', None)
     if agent is None or not hasattr(agent, 'actor'):
@@ -249,7 +284,7 @@ def _policy_weights(gres, policy, nb):
     if len(states) != len(nb):
         raise ValueError(f'The trainer was built on a grid of {len(states)} kept points; this grid has {len(nb)}. '
                          f'Pass a trainer built on this grid.')
-    out = net(torch.tensor(states, dtype=torch.float, device=device)).detach().cpu().numpy()
+    out = net(torch.tensor(states, dtype=torch.float, device=device)).detach().cpu().numpy().astype(np.float64)
     if out.shape != nb.shape:
         raise ValueError(f'The actor gives {out.shape[1]} moves; this grid has {nb.shape[1]}.')
     return out

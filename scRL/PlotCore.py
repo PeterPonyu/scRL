@@ -1498,7 +1498,8 @@ def plot_fates(gres, key_add='gate', cells=False, dims=(0, 1, 2), view=(22, -58)
     cluster.
 
     Works with the results of ``fate_gate`` and ``fate_probabilities`` (``key_add`` as given there). Grid
-    points (or cells) without weights are drawn grey.
+    points (or cells) without a heaviest lineage are drawn grey ('none'); for lineage shares the per-cluster
+    bars end with a grey segment for the walks that arrive at no listed lineage.
 
     Parameters
     ----------
@@ -1551,6 +1552,8 @@ def plot_fates(gres, key_add='gate', cells=False, dims=(0, 1, 2), view=(22, -58)
     for i, n in enumerate(names):
         ax3.barh(y, means[:, i], left=left, color=colors.get(n), label=n, height=.8)
         left += means[:, i]
+    if (1 - left > 1e-9).any():                        # walks that arrive at no listed lineage
+        ax3.barh(y, np.clip(1 - left, 0, None), left=left, color=colors.get('none', GREY), label='none', height=.8)
     ax3.set_yticks(y, [str(c) for c in order])
     ax3.set_xlim(0, 1)
     ax3.set_xlabel('Mean lineage weight')

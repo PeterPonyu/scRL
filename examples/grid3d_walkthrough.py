@@ -110,7 +110,10 @@ with scRL.plot_style():
     save(scRL.plot_fates(gres), '05_fates_gate')
     save(scRL.plot_fates(gres, key_add='fate'), '05_fates_shares')
     share = pd.Series(gres.grids['fate_top']).value_counts(normalize=True).round(2).to_dict()
-    print(f'5. heaviest lineage of the grid points from the walk: {share}')
+    mep = np.asarray(gres.grids['mapped_grids_clusters']) == '7MEP'
+    from_mep = {n: round(float(gres.grids[f'fate_{n}'][mep].mean()), 2) for n in lineages}
+    print(f'5. heaviest lineage of the grid points from the walk: {share}; from 7MEP: {from_mep}, '
+          f'arrived {gres.grids["fate_reached"][mep].mean():.2f}')
 
     # 6. Trajectories and simulator with the soft actor-critic of section 2
     scRL.d_rewards(gres, starts=['7MEP'], ends=['1Ery', '2Ery'])

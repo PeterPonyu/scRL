@@ -50,13 +50,16 @@ cluster.
 Lineage shares
 --------------
 
-``scRL.fate_probabilities`` gives, for every grid point, the probability that a walk starting there reaches
-the end points of each lineage before those of any other lineage; the shares of a point sum to one without a
-gate. ``forward`` biases the walk toward later pseudotime (0 is the unbiased walk). At early grid points the
-split among lineages depends on ``forward`` and on which clusters are given as the ends of each lineage, so
-state both when reporting it. The results are stored like those of the gate, so ``plot_fates(gres,
-key_add='fate')`` and ``compare_fates(..., key='fate_top')`` read them; grid points from which no end can be
-reached are marked 'none'. For value maps of trained learners use the gate (``fate_gate``).
+``scRL.fate_probabilities`` gives, for every grid point, the share of walks starting there that enter the end
+points of each lineage first within ``steps`` moves (1,000 by default). ``forward`` biases the walk toward
+later pseudotime (0 is the unbiased walk, which on a large grid may need more moves). The shares are not
+renormalised: they sum to the share of walks that arrive at any listed lineage (``fate_reached``), so a region
+whose walks do not arrive, for example a tip that is not among the listed lineages, shows up as 'none'. At
+early grid points the split among lineages depends on ``forward`` and on which clusters are given as the ends
+of each lineage, so state both when reporting it. The results are stored like those of the gate, so
+``plot_fates(gres, key_add='fate')`` (with a grey 'none' segment for walks that do not arrive) and
+``compare_fates(..., key='fate_top')`` read them. For value maps of trained learners use the gate
+(``fate_gate``).
 
 Reachability
 ------------
