@@ -82,7 +82,7 @@ def _traj_results_3d(gres, mask, key, points, multiple):
         trajs = gres.trajectory[key + '_traj'][:, :3]
         colors = mpl.cm.rainbow(np.linspace(0, 1, len(trajs)))
         for i in range(len(trajs) - 1):
-            ax.plot(*trajs[i:i + 2].T, color=colors[i], lw=2)
+            ax.quiver(*trajs[i], *(trajs[i + 1] - trajs[i]), color=colors[i], lw=2, arrow_length_ratio=.3)
     ax.set_xticklabels([])
     ax.set_yticklabels([])
     ax.set_zticklabels([])

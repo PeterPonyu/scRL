@@ -33,7 +33,7 @@ def get_traj_df(gres, trainer, n = 100, key = None):
             continue
         else:
             idx = df[c].dropna().values.astype('int')
-            mask = time[idx].values < i / gres.grids['n']
+            mask = time[idx].values < i / gres.grids.get('pseudotime_span', gres.grids['n'])
             if any(mask):
                 idx = idx[mask]
                 ls.append(grids[idx,:].mean(axis=0))

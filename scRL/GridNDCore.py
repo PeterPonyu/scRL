@@ -298,7 +298,7 @@ def align_pseudotime_nd(gres, early_cluster, n_sample_cells=10, key_add='pseudot
     n-D version of ``align_pseudotime``.
 
     Pseudotime is the mean number of grid steps from start points sampled in the early cluster, min-max
-    scaled. When the grid has several connected parts, the part holding most sampled start points is the
+    scaled; the unscaled range in grid steps is stored as ``gres.grids[key_add + '_span']``. When the grid has several connected parts, the part holding most sampled start points is the
     main part (on equal counts, the part holding the start point with the smallest grid index), and each other part is attached at its grid point nearest to the main part, continuing the
     pseudotime of the main-part grid point it is nearest to. Ties between equally near pairs are broken by
     the smallest grid index (of the main-part point, then of its partner).
@@ -337,6 +337,7 @@ def align_pseudotime_nd(gres, early_cluster, n_sample_cells=10, key_add='pseudot
             in_c = np.flatnonzero(part == c)
             m, o = _closest_pair(gres, tree, in_main, in_c)
             t[in_c] = dijkstra(adj, directed=False, indices=o)[in_c] + t[m]
+    gres.grids[key_add + '_span'] = t.max() - t.min()
     t = (t - t.min()) / (t.max() - t.min())
     gres.grids[key_add] = pd.Series(t, index=mapped_grids)
 
