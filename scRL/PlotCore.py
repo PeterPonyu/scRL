@@ -438,15 +438,23 @@ def _policy_moves(gres, trainer, travel):
 
     ActorCritic and SAC: the expected move, the moves weighted by the actor's probabilities at the grid point's
     state. DDQN and TabularQ: the move with the largest Q-value. An integer array gives one move index per
-    kept grid point (for example the best moves stored by ``exact_values``).
+    kept grid point; a 2-D array (kept grid points x moves) gives move weights, booleans or probabilities, and
+    the weighted mean move is used (for example the equally good moves ``exact_<key>_best``).
     """
     import torch
     from .GridNDCore import OFFSETS_2D
     offsets = np.asarray(gres.grids['offsets'] if 'offsets' in gres.grids else OFFSETS_2D, dtype=float)
     if isinstance(trainer, np.ndarray):
         if len(trainer) != len(gres.grids['mapped_grids']):
-            raise ValueError('A move array needs one move index per kept grid point.')
-        return offsets[trainer[_positions(gres, travel)].astype(int)] * _lattice_spacing(gres)[0]
+            raise ValueError('A move array needs one row per kept grid point.')
+        rows = trainer[_positions(gres, travel)]
+        if rows.ndim == 2:
+            weights = rows.astype(float)
+            total = weights.sum(1, keepdims=True)
+            move = np.where(total > 0, weights @ offsets / np.where(total > 0, total, 1), 0)
+        else:
+            move = offsets[rows.astype(int)]
+        return move * _lattice_spacing(gres)[0]
     agent = trainer.agent
     if hasattr(agent, 'Q'):
         move = offsets[np.argmax(agent.Q.loc[travel].to_numpy(dtype=float), axis=1)]
@@ -638,7 +646,7 @@ def plot_slices(gres, key=None, axis=2, n_slices=6, cells=False, dims=(0, 1, 2),
         Figure size; the panels are then placed by matplotlib.
         (Default: None, from the number of panels and the data aspect)
     policy
-        A trained ``scRL.trainer``, or an array of move indices (one per kept grid point): draw the direction
+        A trained ``scRL.trainer``, or an array of moves (see ``plot_policy``): draw the direction
         the agent tends to move in, averaged over blocks of ``policy_every`` x ``policy_every`` lattice
         positions of the slab (blocks with at least 3 travel points). Each arrow starts at the mean position
         of its block and is the mean move in the plane, 0.8 block widths long when all moves agree and
@@ -1100,8 +1108,8 @@ def plot_policy(gres, trainer, dims=(0, 1, 2), view=(22, -58), ax=None, every=No
     gres
         Grids results.
     trainer
-        A trained ``scRL.trainer``, or an integer array with one move index per kept grid point (for example
-        ``gres.grids['exact_<key>_move']``).
+        A trained ``scRL.trainer``; an integer array with one move index per kept grid point; or a 2-D array
+        of move weights (kept grid points x moves), for example ``gres.grids['exact_<key>_best']``.
     dims
         Embedding axes to draw for 3-D and higher grids.
         (Default: (0, 1, 2))

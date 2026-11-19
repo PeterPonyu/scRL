@@ -153,6 +153,8 @@ scRL.fate_gate(gres, ['exact_0', 'exact_3'], names=['lineage 0', 'lineage 3'])
 scRL.plot_fates(gres)
 ```
 
+`scRL.fate_probabilities(gres, {'lineage 0': '0', 'lineage 3': '3'})` gives instead, for every grid point, the probability that a walk on the grid reaches each lineage first; the shares sum to one and are drawn with `scRL.plot_fates(gres, key_add='fate')`.
+
 ## Comparing conditions
 
 Two conditions are compared on one grid built from all cells. `scRL.project_conditions` counts each condition's cells at every grid point, `scRL.compare_abundance` tests where their numbers differ and reports, per cluster, how many grid points held by one condition only are expected from sampling alone, `scRL.compare_values(gres, test, reference, ends=[...])` labels each condition's map from its own cells, solves the lineage reward exactly on both maps and compares the values against a label-shuffling null, and `scRL.plot_conditions` draws the result.

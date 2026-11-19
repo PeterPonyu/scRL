@@ -1,5 +1,5 @@
-Exact solution and lineage gate
-===============================
+Exact solution, lineage gate and lineage shares
+===============================================
 
 The grid environment is small and deterministic, so the best return from every grid point can be computed
 exactly instead of being learned. One exact solution per lineage, combined by a gate, gives one fate map.
@@ -14,7 +14,9 @@ exactly instead of being learned. One exact solution per lineage, combined by a 
         scRL.exact_values(gres)                       # stored as gres.grids['exact_<end>']
     scRL.fate_gate(gres, ['exact_0', 'exact_3'], names=['lineage 0', 'lineage 3'])
     scRL.plot_fates(gres)
-    scRL.plot_slices(gres, key='exact_3', policy=gres.grids['exact_3_move'])
+    scRL.plot_slices(gres, key='exact_3', policy=gres.grids['exact_3_best'])
+    scRL.fate_probabilities(gres, {'lineage 0': '0', 'lineage 3': '3'}, forward=1)
+    scRL.plot_fates(gres, key_add='fate')
 
 Exact solution
 --------------
@@ -23,8 +25,9 @@ Exact solution
 learners (a move off the grid costs -2 and ends the episode, a step onto the boundary outside the start
 cluster ends it, at most ``max_step + 1`` moves) by backward induction over the moves. It has no random seed and
 takes well under a second. It stores the values as ``gres.grids['exact_<reward key>']`` and the best move from
-every grid point as ``gres.grids['exact_<reward key>_move']``, which ``plot_policy`` and
-``plot_slices(policy=...)`` can draw.
+every grid point as ``gres.grids['exact_<reward key>_move']``. On a regular lattice several moves are often
+equally good; ``gres.grids['exact_<reward key>_best']`` marks all of them, and ``plot_policy`` and
+``plot_slices(policy=...)`` draw their mean, which is the reading to use.
 
 One rule of the learners is relaxed: returning to a grid point does not end the episode. Inside a rewarded
 region the best path may therefore go back and forth between neighbouring rewarded points, and the value there
@@ -43,6 +46,17 @@ stored for the grid points and, brought back with the Gaussian kernel of ``proje
 
 ``scRL.plot_fates`` draws the heaviest lineage, how undecided each point is, and the mean lineage weights per
 cluster.
+
+Lineage shares
+--------------
+
+``scRL.fate_probabilities`` gives, for every grid point, the probability that a walk starting there reaches
+the end points of each lineage before those of any other lineage; the shares of a point sum to one without a
+gate. ``forward`` biases the walk toward later pseudotime (0 is the unbiased walk). At early grid points the
+split among lineages depends on ``forward`` and on which clusters are given as the ends of each lineage, so
+state both when reporting it. The results are stored like those of the gate, so ``plot_fates(gres,
+key_add='fate')`` and ``compare_fates(..., key='fate_top')`` read them; grid points from which no end can be
+reached are marked 'none'. For value maps of trained learners use the gate (``fate_gate``).
 
 Reachability
 ------------

@@ -42,8 +42,11 @@ def exact_values(gres, reward_type='d', reward_mode='Decision', gamma=.9, max_st
 
     Returns
     ----------
-    The values, one per kept grid point in stored order. They are stored as ``gres.grids[key]``, and the index
-    of the best move from each kept grid point as ``gres.grids[key + '_move']``.
+    The values, one per kept grid point in stored order. They are stored as ``gres.grids[key]``; the index of
+    the first best move from each kept grid point as ``gres.grids[key + '_move']``, and every best move (a
+    boolean array, kept grid points x moves, True for each move within 1e-9 of the best; on a regular lattice
+    several moves are often equally good) as ``gres.grids[key + '_best']``. Pass ``_best`` to the policy views
+    to draw the mean of the equally good moves.
     """
     table = f'{reward_type}_{reward_mode}_rewards'
     if table not in gres.qlearning:
@@ -65,4 +68,5 @@ def exact_values(gres, reward_type='d', reward_mode='Decision', gamma=.9, max_st
     key = key_add or 'exact_' + gres.qlearning['reward_key']
     gres.grids[key] = V
     gres.grids[key + '_move'] = Q.argmax(1)
+    gres.grids[key + '_best'] = Q >= V[:, None] - 1e-9
     return V
