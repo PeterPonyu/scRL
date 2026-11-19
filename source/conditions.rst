@@ -70,7 +70,7 @@ two libraries. When each condition has several libraries, pass one sample label 
 The grid-point test of ``compare_abundance`` is then made across samples. It is valid but has little power
 with a handful of libraries: three or four per condition can leave almost no grid point called after
 correction. Where each library contributes one number the comparison has power: the share of each library's
-cells per lineage (``compare_fates``, which adds means over samples and a Welch t-test across samples) and per
-cluster (the ``share_reference``, ``share_test``, ``pvalue_samples`` and ``qvalue_samples`` columns of
-``gres.grids['abundance_clusters']``). With replicates, read the grid map as the picture and these tables as
+cells per lineage (``compare_fates``, which adds means over samples and a Welch t-test across samples) and,
+when clusters are projected, per cluster (the ``share_reference``, ``share_test``, ``pvalue_samples`` and
+``qvalue_samples`` columns of ``gres.grids['abundance_clusters']``). With replicates, read the grid map as the picture and these tables as
 the test.

@@ -292,3 +292,48 @@ def test_compare_abundance_cluster_shares_across_samples():
         per = [np.mean(labels[samples == s] == cluster) for s in ('A0', 'A1', 'A2')]
         assert table.loc[cluster, 'share_test'] == pytest.approx(np.mean(per))
     assert table.loc['branchB', 'qvalue_samples'] < .05
+
+
+def test_welch_without_spread():
+    from scRL.ConditionCore import _welch
+    a = np.array([[.2, .5, .3], [.2, .5, .4]])
+    b = np.array([[.2, .1, .3], [.2, .1, .5]])
+    t, df, p = _welch(a, b)
+    assert p[0] == 1 and t[0] == 0 and np.isnan(df[0])
+    assert p[1] == 0 and t[1] == np.inf
+    from scipy import stats
+    assert p[2] == pytest.approx(stats.ttest_ind(a[:, 2], b[:, 2], equal_var=False).pvalue)
+
+
+def test_cluster_qvalues_include_separated_clusters():
+    X, labels, Z, genes = make_tree(n_cells=1500, d=3, seed=1)
+    labels = labels.astype(object)
+    in_b = np.flatnonzero(labels == 'branchB')
+    labels[in_b[:len(in_b) % 3]] = 'trunk'                                # a multiple of 3 branchB cells
+    labels = labels.astype(str)
+    gres = scRL.grids_from_embedding(X)
+    scRL.project_cluster(gres, pd.Series(pd.Categorical(labels)))
+    rng = np.random.default_rng(0)
+    conditions = np.where(rng.random(len(labels)) < .5, 'A', 'B')
+    conditions[labels == 'branchB'] = 'B'
+    rest = np.flatnonzero((conditions == 'B') & (labels != 'branchB'))
+    extra = len(rest) % 3
+    conditions[rest[:extra]] = 'A'                                        # equal numbers of B cells per sample
+    samples = np.empty(len(labels), dtype=object)
+    for group in (np.flatnonzero((conditions == 'B') & (labels == 'branchB')),
+                  np.flatnonzero((conditions == 'B') & (labels != 'branchB'))):
+        samples[group] = [f'B{i % 3}' for i in range(len(group))]
+    a_cells = np.flatnonzero(conditions == 'A')
+    samples[a_cells] = [f'A{i}' for i in rng.integers(3, size=len(a_cells))]
+    scRL.project_conditions(gres, conditions)
+    scRL.compare_abundance(gres, 'A', 'B', samples=samples.astype(str), n_shuffles=2)
+    table = gres.grids['abundance_clusters']
+    assert table.loc['branchB', 'pvalue_samples'] == 0 and np.isfinite(table['qvalue_samples']).all()
+    assert table.loc['branchB', 'qvalue_samples'] == 0
+
+
+def test_shares_by_sample_rejects_a_condition_category():
+    gres, labels, conditions, samples = _samples_setup(False)
+    gres.embedding['lineage'] = np.where(labels == 'root', 'condition', 'other')
+    with pytest.raises(ValueError, match='condition'):
+        scRL.shares_by_sample(gres, samples, key='lineage')

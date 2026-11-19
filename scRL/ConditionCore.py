@@ -138,8 +138,8 @@ def compare_abundance(gres, test, reference, min_cells=3, alpha=.05, samples=Non
         (Default: .05)
     samples
         One sample label per cell (each sample in one condition, at least two per condition): test across
-        samples instead of across cells, and add to the per-cluster table the share of each sample's cells per
-        cluster with a test across samples. Without samples every test is across cells and cannot tell a
+        samples instead of across cells, and, when clusters are projected, add to the per-cluster table the
+        share of each sample's cells per cluster with a test across samples. Without samples every test is across cells and cannot tell a
         difference between conditions from a difference between two libraries; with one library per condition
         read the calls as a description of these two libraries. With samples the grid-point test is valid but
         has little power with a handful of libraries (three or four per condition can leave almost no grid
@@ -160,9 +160,10 @@ def compare_abundance(gres, test, reference, min_cells=3, alpha=.05, samples=Non
     ``abundance_log2fc`` (NaN where not tested), ``abundance_qvalue``, ``abundance_class``,
     ``abundance_call``, their colour dicts ``abundance_class_colors`` and ``abundance_call_colors``, the names
     ``abundance_test`` and ``abundance_reference``, and the per-cluster summary ``abundance_clusters`` (with
-    ``samples`` also ``share_reference``, ``share_test``: the mean over samples of the share of a sample's cells
-    in the cluster, ``pvalue_samples`` from a Welch t-test across samples and ``qvalue_samples``,
-    Benjamini-Hochberg over clusters).
+    ``samples`` and projected clusters also ``share_reference``, ``share_test``: the mean over samples of the
+    share of a sample's cells in the cluster, where cells without a cluster label count in no cluster so a
+    sample's shares can sum to less than 1; ``pvalue_samples`` from a Welch t-test across samples, 1 or 0 when
+    the shares vary in neither condition; and ``qvalue_samples``, Benjamini-Hochberg over clusters).
     """
     labels = _conditions(gres, test, reference)
     if 'condition_counts' not in gres.grids:
@@ -551,7 +552,10 @@ def _sample_conditions(gres, samples, names=None):
 
 
 def _welch(a, b):
-    """Welch t statistic, degrees of freedom and two-sided p-value of mean(a) - mean(b), per column."""
+    """
+    Welch t statistic, degrees of freedom and two-sided p-value of mean(a) - mean(b), per column. When neither
+    group varies the p-value is 1 for equal means and 0 for different ones (t 0 or plus or minus infinity, df NaN).
+    """
     ma, mb = a.mean(0), b.mean(0)
     va, vb = a.var(0, ddof=1) / len(a), b.var(0, ddof=1) / len(b)
     se2 = va + vb
@@ -559,6 +563,10 @@ def _welch(a, b):
         t = (ma - mb) / np.sqrt(se2)
         df = se2 ** 2 / (va ** 2 / (len(a) - 1) + vb ** 2 / (len(b) - 1))
         p = 2 * stats.t.sf(np.abs(t), df)
+    still = se2 == 0
+    same = ma == mb
+    t = np.where(still, np.where(same, 0.0, np.sign(ma - mb) * np.inf), t)
+    p = np.where(still, np.where(same, 1.0, 0.0), p)
     return t, df, p
 
 
@@ -592,6 +600,9 @@ def shares_by_sample(gres, samples, key='gate_top'):
     samples, of = _sample_conditions(gres, samples)
     cell_key = np.asarray(gres.embedding[key]).astype(str)
     cats = sorted(set(cell_key.tolist()))
+    if 'condition' in cats:
+        raise ValueError(f"gres.embedding[{key!r}] has a category named 'condition', which is the name of the "
+                         f"column holding each sample's condition; rename that category.")
     rows = {s: [(cell_key[samples == s] == c).mean() for c in cats] for s in of}
     table = pd.DataFrame.from_dict(rows, orient='index', columns=cats)
     table.insert(0, 'condition', [of[s] for s in table.index])
@@ -636,7 +647,8 @@ def compare_fates(gres, test, reference, key='gate_top', samples=None, n_permuta
     ``test_low``, ``test_high`` (shares with 95% bootstrap intervals), ``difference`` (test minus reference)
     and ``pvalue`` (two-sided, from permuting the condition labels). With ``samples`` also
     ``reference_mean`` and ``test_mean`` (means over samples), ``difference_samples``, ``t``, ``df`` and
-    ``pvalue_samples`` (Welch t-test across samples), and ``n_reference``, ``n_test`` (numbers of samples).
+    ``pvalue_samples`` (Welch t-test across samples; when the shares vary in neither condition the p-value is
+    1 for equal and 0 for different means), and ``n_reference``, ``n_test`` (numbers of samples).
     """
     labels = _conditions(gres, test, reference)
     if key not in gres.embedding:
