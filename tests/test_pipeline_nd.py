@@ -1,0 +1,67 @@
+import numpy as np
+import pandas as pd
+import pytest
+
+import scRL
+from conftest import make_tree, seed_all
+
+
+def _ready(d, **grid_kw):
+    X, labels, Z, genes = make_tree(d=d)
+    gres = scRL.grids_from_embedding(X, **grid_kw)
+    scRL.project_cluster(gres, pd.Series(pd.Categorical(labels)))
+    seed_all(0); scRL.align_pseudotime(gres, 'root', boundary=False)
+    scRL.project(gres, genes)
+    return gres, Z
+
+
+@pytest.mark.parametrize('algo', ['ActorCritic', 'DDQN', 'TabularQ'])
+def test_three_agents_train_in_3d(algo):
+    gres, Z = _ready(3)
+    scRL.d_rewards(gres, starts=['root'], ends=['branchA'])
+    seed_all(0)
+    t = scRL.trainer(algo, gres, reward_type='d', reward_mode='Decision', starts_prob=False, X_latent=Z, num_episodes=300)
+    returns, _ = t.train()
+    assert len(returns) == 300 and np.isfinite(returns).all()
+    if algo != 'DDQN':                                  # eval_fate has no DDQN branch in v1
+        t.eval_fate()
+        assert np.isfinite(np.asarray(gres.grids['fate_branchA'], dtype=float)).all()
+
+
+def test_decision_value_readout_in_3d():
+    gres, Z = _ready(3)
+    scRL.d_rewards(gres, starts=['root'], ends=['branchA'])
+    seed_all(0)
+    t = scRL.trainer('ActorCritic', gres, reward_type='d', starts_prob=False, X_latent=Z, num_episodes=300)
+    t.train()
+    scRL.get_state_value(gres, t, 'decision')
+    scRL.project_back(gres, 'decision')
+    assert gres.grids['decision'].shape == (len(gres.grids['mapped_grids']),)
+    v = gres.embedding['decision']
+    assert v.shape == (600,) and v.min() == 0 and v.max() == 1
+
+
+def test_gene_rewards_with_start_probabilities_in_3d():
+    gres, Z = _ready(3)
+    scRL.c_rewards(gres, reward_keys=['geneA'], starts=['root'], starts_keys=['geneRoot'], punish_keys=['geneB'], mode='Contribution')
+    seed_all(0)
+    t = scRL.trainer('ActorCritic', gres, reward_type='c', reward_mode='Contribution', starts_prob=True, X_latent=Z, num_episodes=200)
+    assert len(t.train()[0]) == 200
+
+
+@pytest.mark.parametrize('d, kw', [(2, dict(method='occupancy')), (4, {}), (5, {}), (3, dict(moves='full'))])
+def test_other_grids_run_end_to_end(d, kw):
+    gres, Z = _ready(d, **kw)
+    scRL.d_rewards(gres, starts=['root'], ends=['branchA'])
+    seed_all(0)
+    t = scRL.trainer('ActorCritic', gres, reward_type='d', starts_prob=False, X_latent=Z, num_episodes=100)
+    assert len(t.train()[0]) == 100
+
+
+def test_v1_2d_pipeline_still_runs(scan2d):
+    scRL.d_rewards(scan2d, starts=['root'], ends=['branchA'])
+    seed_all(0)
+    t = scRL.trainer('ActorCritic', scan2d, reward_type='d', starts_prob=False, X_latent=make_tree(d=2)[2], num_episodes=100)
+    assert len(t.train()[0]) == 100
+    scRL.get_state_value(scan2d, t, 'v'); scRL.project_back(scan2d, 'v')
+    assert scan2d.embedding['v'].shape == (600,)

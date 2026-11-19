@@ -3,12 +3,14 @@
 The rules are those of ``EnvironmentCore`` and ``TabularQCore``; moves are looked up in the neighbour table
 of the grid (grid point x move -> next grid point, -1 for a move off the grid).
 """
+import random
 import time
+import warnings
 
 import numpy as np
 import pandas as pd
 
-from .GridNDCore import check_labels
+from .GridNDCore import check_labels, get_state_nd
 
 
 def _as_list(names):
@@ -120,3 +122,227 @@ def c_rewards_nd(gres, reward_keys, starts=None, starts_keys=None, punish_keys=N
     gres.qlearning[f'c_{mode}_rewards'] = _table(gres, bonus)
     gres.qlearning['matrix'] = _kept_mask(gres)
     print(f'Time used for reward generation: {(time.time() - start_time):.2f} seconds')
+
+
+def _reach(neighbors, R, starts, stop, max_step):
+    """Breadth-first search over the moves an episode can make; see ``reachability``."""
+    dist = np.full(len(neighbors), -1)
+    dist[starts] = 0
+    first_entry = np.full(len(neighbors), np.inf)
+    frontier = np.unique(starts)
+    for step in range(1, max_step + 2):
+        if not len(frontier):
+            break
+        nb = neighbors[frontier]
+        entered = nb[(nb >= 0) & (R[frontier] > 0)]
+        first_entry[entered] = np.minimum(first_entry[entered], step)
+        nxt = np.unique(nb[nb >= 0])
+        nxt = nxt[dist[nxt] < 0]
+        dist[nxt] = step
+        frontier = nxt[~stop[nxt]]
+    reached = np.isfinite(first_entry)
+    return {'rewarded': int(len(np.unique(neighbors[(neighbors >= 0) & (R > 0)]))),
+            'reached': int(reached.sum()),
+            'min_steps': int(first_entry[reached].min()) if reached.any() else None}
+
+
+def _stop_mask(gres, starts_grids):
+    """Grid points where an episode stops when entered: boundary points outside the start points."""
+    stop = (gres.grids['neighbors'] < 0).any(1)
+    if starts_grids:
+        stop[np.isin(gres.grids['mapped_grids'], list(starts_grids))] = False
+    return stop
+
+
+def reachability(gres, reward_type='d', reward_mode='Decision', max_step=50):
+    """
+    Check which rewarded grid points an episode can reach under the stop rules and the step cap.
+
+    Episodes start at the start cluster grid points (or, without them, at the grid points with a positive
+    start probability), stop when they leave the grid, enter a boundary point outside the start points or
+    revisit a point, and make at most ``max_step + 1`` moves.
+
+    Parameters
+    ----------
+    gres
+        Grids results after reward generating.
+    reward_type
+        'c' or 'd'.
+        (Default: 'd')
+    reward_mode
+        'Decision' or 'Contribution'.
+        (Default: 'Decision')
+    max_step
+        Maximum steps the agent can travel in the environment.
+        (Default: 50)
+
+    Returns
+    ----------
+    dict with 'rewarded' (grid points earning a positive reward when entered), 'reached' (how many of them
+    can be entered) and 'min_steps' (fewest moves to enter one, or None).
+    """
+    mapped = np.asarray(gres.grids['mapped_grids'])
+    starts_grids = gres.grids.get('starts_cluster_grids')
+    if starts_grids:
+        starts = np.flatnonzero(np.isin(mapped, list(starts_grids)))
+    else:
+        starts = np.flatnonzero(np.asarray(gres.grids['starts_probs']) > 0)
+    R = gres.qlearning[f'{reward_type}_{reward_mode}_rewards'].to_numpy(dtype=float)
+    return _reach(gres.grids['neighbors'], R, starts, _stop_mask(gres, starts_grids), max_step)
+
+
+class _gridEnvND:
+    """State shared by the n-D environments: reward table, neighbour table, start and stop points."""
+
+    def __init__(self, gres, max_step, reward_type, reward_mode, starts_probs):
+        self.N = gres.grids['n']
+        self.rewards_df = gres.qlearning[f'{reward_type}_{reward_mode}_rewards']
+        self.mapped_grids = np.asarray(gres.grids['mapped_grids'])
+        self.starts_probs = None
+        if starts_probs:
+            if 'starts_probs' not in gres.grids:
+                raise ValueError('starts_probs=True needs start probabilities: call '
+                                 'c_rewards(..., starts_keys=[...]) first, or use starts_probs=False '
+                                 '(starts_prob=False in trainer) to start from the start cluster.')
+            self.starts_probs = gres.grids['starts_probs']
+        self.starts_grids = gres.grids['starts_cluster_grids']
+        self.mapped_boundary = gres.grids['mapped_boundary']
+        self.pseudotime = gres.grids['pseudotime']
+        self.reset_ = False
+        self.max_step = max_step
+        self._R = self.rewards_df.to_numpy(dtype=float)
+        self._next = gres.grids['neighbors']
+        self._time = self.pseudotime.loc[self.mapped_grids].to_numpy(dtype=float)
+        self._pos = dict(zip(self.mapped_grids.tolist(), range(len(self.mapped_grids))))
+        self._stop = _stop_mask(gres, self.starts_grids)
+        if self.starts_probs is not None:
+            starts = np.flatnonzero(np.asarray(self.starts_probs) > 0)
+        else:
+            starts = np.flatnonzero(np.isin(self.mapped_grids, list(self.starts_grids or [])))
+        if _reach(self._next, self._R, starts, self._stop, max_step)['reached'] == 0:
+            warnings.warn(f'No rewarded grid point can be reached from the start points within {max_step + 1} '
+                          f'moves under the stop rules; the agent cannot learn this reward. Consider a larger '
+                          f'max_step, a larger radius or other start points.', UserWarning)
+
+    def _start(self):
+        if self.starts_probs is not None:
+            return np.random.choice(self.mapped_grids, 1, p=self.starts_probs).item()
+        return random.sample(self.starts_grids, 1)[0]
+
+
+class deepEnvND(_gridEnvND):
+    """
+    n-D version of ``deepEnv``: environment for deep reinforcement learning on a grid with a neighbour table.
+
+    Parameters
+    ----------
+    gres
+        Grids results after reward generating.
+    X_pca
+        The input latent space.
+    max_step
+        Maximum steps the agent can travel in the environment.
+        (Default: 50)
+    KNN
+        Nearest neighbors for considering each grid points state value.
+        (Default: 100)
+    reward_type
+        The reward type generated, 'c' or 'd'.
+        (Default: 'c')
+    reward_mode
+        The reward mode selected when generating the reward, 'Decision' or 'Contribution'.
+        (Default: 'Decision')
+    starts_probs
+        Whether to sample start points from the start probabilities of ``c_rewards``.
+        (Default: True)
+    """
+    def __init__(self, gres, X_pca, max_step=50, KNN=100, reward_type='c', reward_mode='Decision', starts_probs=True):
+        super().__init__(gres, max_step, reward_type, reward_mode, starts_probs)
+        self.state_space = get_state_nd(gres, X_pca, KNN)
+
+    def reset(self):
+        self.state_idx = self._start()
+        self._p = self._pos[self.state_idx]
+        self.state = np.mean(self.state_space[self._p], axis=0)
+        self.time_step = 0
+        self.reset_ = True
+        self.trajectory = [self.state_idx]
+        self._visited = {self.state_idx}
+        return self.state
+
+    def step(self, action):
+        if not self.reset_:
+            print('Warning: reset the environment first!')
+            return
+        p = self._p
+        q = self._next[p, action]
+        self.time_step += 1
+        if q < 0:
+            return self.state, -2, True, False
+        reward = self._R[p, action]
+        self._p = q
+        self.state_idx = self.mapped_grids[q]
+        self.state = np.mean(self.state_space[q], axis=0)
+        if self._stop[q]:
+            return self.state, reward + (self._time[q] - self._time[p]), True, False
+        if self.state_idx in self._visited:
+            return self.state, -1, True, False
+        self._visited.add(self.state_idx)
+        self.trajectory.append(self.state_idx)
+        return self.state, reward, False, self.time_step > self.max_step
+
+
+class tabularEnvND(_gridEnvND):
+    """
+    n-D version of ``tabularEnv``: environment for tabular Q-learning on a grid with a neighbour table.
+
+    Parameters
+    ----------
+    gres
+        Grids results after reward generating.
+    max_step
+        Maximum steps the agent can travel in the environment.
+        (Default: 50)
+    reward_type
+        The reward type generated, 'c' or 'd'.
+        (Default: 'c')
+    reward_mode
+        The reward mode selected when generating the reward, 'Decision' or 'Contribution'.
+        (Default: 'Decision')
+    starts_probs
+        Whether to sample start points from the start probabilities of ``c_rewards``.
+        (Default: True)
+    """
+    def reset(self):
+        self.state = self._start()
+        self._p = self._pos[self.state]
+        self.time_step = 0
+        self.reset_ = True
+        self.trajectory = [self.state]
+        self._visited = {self.state}
+        return self.state
+
+    def step(self, action):
+        if not self.reset_:
+            print('Warning: reset the environment first!')
+            return
+        p = self._p
+        q = self._next[p, action]
+        if q < 0:
+            return self.state, -2, True, False
+        reward = self._R[p, action] + (self._time[q] - self._time[p])
+        self._p = q
+        self.state = self.mapped_grids[q]
+        if self._stop[q]:
+            return self.state, reward, True, False
+        truncation = False
+        if self.state in self._visited:
+            truncation = True
+            reward = -1
+        else:
+            self._visited.add(self.state)
+            self.trajectory.append(self.state)
+        self.time_step += 1
+        if self.time_step > self.max_step:
+            truncation = True
+        return self.state, reward, False, truncation

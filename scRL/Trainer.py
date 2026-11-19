@@ -5,6 +5,8 @@ from .DDQNCore import dqn
 from .ActorCriticCore import actorcritic
 from .TabularQCore import tabularQ, tabularEnv
 from .Simulator.Core import simulator
+from .GridNDCore import is_nd
+from .EnvironmentNDCore import deepEnvND, tabularEnvND
 import torch
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
@@ -102,22 +104,24 @@ class trainer:
         self.algo = algo    
         self.num_episodes = num_episodes
         self.gres = gres
+        nd = is_nd(gres)
+        n_actions = len(gres.grids['actions']) if nd else 8
         if algo == 'TabularQ':
-            self.env = tabularEnv(gres, max_step, reward_type, reward_mode, starts_prob)
-            self.agent = tabularQ(self.env, alpha, gamma, 8)
+            self.env = (tabularEnvND if nd else tabularEnv)(gres, max_step, reward_type, reward_mode, starts_prob)
+            self.agent = tabularQ(self.env, alpha, gamma, n_actions)
         else:
             if X_latent is not None:
                 gres.embedding['X_latent'] = X_latent
                 state_dim = X_latent.shape[1]
                 self.state_dim = state_dim
                 self.hidden_dim = hidden_dim
-                self.env = deepEnv(gres, X_latent, max_step, KNN, reward_type, reward_mode, starts_prob)
+                self.env = (deepEnvND if nd else deepEnv)(gres, X_latent, max_step, KNN, reward_type, reward_mode, starts_prob)
                 if algo == 'DDQN':
                     self.batch_size = batch_size
                     self.capacity = capacity
-                    self.agent = dqn(state_dim, hidden_dim, 8, gamma, lr, soft, target_update, tau)
+                    self.agent = dqn(state_dim, hidden_dim, n_actions, gamma, lr, soft, target_update, tau)
                 if algo == 'ActorCritic':
-                    self.agent = actorcritic(state_dim, hidden_dim, 8, gamma, actor_lr, critic_lr)
+                    self.agent = actorcritic(state_dim, hidden_dim, n_actions, gamma, actor_lr, critic_lr)
             else:
                 raise ValueError('Please select a latent space of the data')
         

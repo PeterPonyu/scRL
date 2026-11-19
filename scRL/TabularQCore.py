@@ -98,7 +98,7 @@ The step method is where the action takes place. If the environment has not been
 
 class tabularQ:
     def __init__(self, env, alpha=.5, gamma=.9, n_actions=8):
-        self.Q = pd.DataFrame(0, index=env.mapped_grids, columns=np.arange(8))
+        self.Q = pd.DataFrame(0.0, index=env.mapped_grids, columns=np.arange(n_actions))
         self.n_actions = n_actions
         self.alpha = alpha
         self.gamma = gamma
