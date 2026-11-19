@@ -75,3 +75,50 @@ def test_islands_get_finite_pseudotime():
     seed_all(0); scRL.align_pseudotime(gres, 'root', boundary=False)
     t = gres.grids['pseudotime']
     assert np.isfinite(t.values).all() and t.min() == 0 and t.max() == 1
+
+
+@pytest.mark.parametrize('mode', ['Decision', 'Contribution'])
+def test_lineage_rewards_equal_v1(scan2d, mode):
+    nd = lattice_from_scan(scan2d)
+    scRL.d_rewards(scan2d, starts=['root'], ends=['branchA'], mode=mode)
+    scRL.d_rewards(nd, starts=['root'], ends=['branchA'], mode=mode)
+    a, b = scan2d.qlearning[f'd_{mode}_rewards'].astype(float), nd.qlearning[f'd_{mode}_rewards']
+    assert list(a.index) == list(b.index) and list(a.columns) == list(b.columns)
+    np.testing.assert_allclose(b.values, a.values, rtol=0, atol=1e-12)
+    assert list(nd.grids['starts_cluster_grids']) == list(scan2d.grids['starts_cluster_grids'])
+    assert list(nd.grids['ends_cluster_grids']) == list(scan2d.grids['ends_cluster_grids'])
+
+
+@pytest.mark.parametrize('kw', [
+    dict(reward_keys=['geneA'], starts=['root'], mode='Decision'),
+    dict(reward_keys=['geneA'], starts=['root'], starts_keys=['geneRoot'], punish_keys=['geneB'], mode='Contribution'),
+    dict(reward_keys=['geneA', 'geneB'], starts_keys=['geneRoot'], mode='Decision'),
+])
+def test_gene_rewards_equal_v1(scan2d, kw):
+    nd = lattice_from_scan(scan2d)
+    scRL.c_rewards(scan2d, **kw); scRL.c_rewards(nd, **kw)
+    key = f"c_{kw['mode']}_rewards"
+    np.testing.assert_allclose(nd.qlearning[key].values, scan2d.qlearning[key].astype(float).values, rtol=0, atol=1e-10)
+    if 'starts_keys' in kw:
+        np.testing.assert_allclose(nd.grids['starts_probs'], scan2d.grids['starts_probs'], atol=1e-12)
+    assert (nd.grids['starts_cluster_grids'] is None) == (scan2d.grids['starts_cluster_grids'] is None)
+
+
+def _grid3d(tree3d):
+    gres = scRL.grids_from_embedding(tree3d[0])
+    scRL.project_cluster(gres, pd.Series(pd.Categorical(tree3d[1])))
+    seed_all(0); scRL.align_pseudotime(gres, 'root', boundary=False)
+    return gres
+
+
+def test_lineage_rewards_in_3d(tree3d):
+    gres = _grid3d(tree3d)
+    scRL.d_rewards(gres, starts='root', ends=['branchA'])           # a bare string is one cluster name
+    R, nb = gres.qlearning['d_Decision_rewards'].values, gres.grids['neighbors']
+    assert R.shape == nb.shape == (len(gres.grids['mapped_grids']), 6)
+    assert ((R == -1) == (nb == -1)).all()
+    is_end = gres.grids['mapped_grids_clusters'] == 'branchA'
+    into_end = (nb >= 0) & is_end[np.clip(nb, 0, None)]
+    assert (R[into_end] > 0).all() and (R[into_end] <= 1).all() and (R[(nb >= 0) & ~into_end] == 0).all()
+    with pytest.raises(ValueError, match='branchA'):
+        scRL.d_rewards(gres, starts=['root'], ends=['nowhere'])
