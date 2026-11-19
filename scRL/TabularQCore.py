@@ -28,6 +28,7 @@ The step method is where the action takes place. If the environment has not been
         Two modes are included:'Decision','Contribution'.
     """
     def __init__(self, gres, max_step = 50, reward_type='c', reward_mode='Decision', starts_probs=True):
+        self.N = gres.grids['n']
         self.rewards_df = gres.qlearning[f'{reward_type}_{reward_mode}_rewards']
         self.mapped_grids = gres.grids['mapped_grids']
         self.starts_probs = None
@@ -62,12 +63,12 @@ The step method is where the action takes place. If the environment has not been
         truncation = False
         df = self.rewards_df
         idx = self.state
-        i = idx%50
-        j = idx//50
+        i = idx%self.N
+        j = idx//self.N
         direction_lut = dict(zip(df.columns,[(i,j+1),(i+1,j+1),(i+1,j),(i+1,j-1),(i,j-1),(i-1,j-1),(i-1,j),(i-1,j+1)]))
         A = direction_lut[df.columns[action]]
         
-        next_state = A[0] + A[1]*50
+        next_state = A[0] + A[1]*self.N
         reward = df.loc[idx, df.columns[action]]
         if reward == -1:
             termination = True

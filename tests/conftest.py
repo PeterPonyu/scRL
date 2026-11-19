@@ -71,7 +71,7 @@ def scan2d(_scan20):
 
 @pytest.fixture
 def scan2d_n50(_scan50):
-    """Same with n=50 (the only grid width the 2-D tabular environment handles)."""
+    """Same with n=50."""
     return copy.deepcopy(_scan50)
 
 

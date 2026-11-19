@@ -64,6 +64,12 @@ def test_tabular_env_matches_2d_code_step_for_step(scan2d_n50):
     _drive(tabularEnv(scan, **kw), tabularEnvND(nd, **kw), 'state')
 
 
+def test_tabular_env_matches_2d_code_on_a_20_wide_grid(scan2d):
+    scan, nd = _pair(scan2d)
+    kw = dict(max_step=50, reward_type='d', reward_mode='Decision', starts_probs=False)
+    _drive(tabularEnv(scan, **kw), tabularEnvND(nd, **kw), 'state')
+
+
 def test_deep_env_with_start_probabilities_matches_2d_code(scan2d):
     scan, nd = _pair_genes(scan2d)
     kw = dict(max_step=50, KNN=10, reward_type='c', reward_mode='Contribution', starts_probs=True)
