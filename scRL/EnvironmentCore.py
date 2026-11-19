@@ -237,7 +237,7 @@ def d_rewards(gres,
                         raise ValueError('Mode must be one of "Decision" and "Contribution"!')
         pbar.update(1)
     pbar.close()
-    gres.qlearning['reward_key'] = '.'.join(ends)
+    gres.qlearning['reward_key'] = '.'.join(map(str, ends))
     gres.grids['ends_cluster_grids'] = ends_cluster_grids
     gres.grids['starts_cluster_grids'] = starts_cluster_grids
     gres.qlearning[f'd_{mode}_rewards'] = df
@@ -285,7 +285,7 @@ def c_rewards(gres,
     """
     if is_nd(gres):
         return c_rewards_nd(gres, reward_keys, starts, starts_keys, punish_keys, beta, mode)
-    if starts is not None:
+    if starts:
         starts = _as_list(starts)
     start_time = time.time()
     masked_grids = gres.grids['masked_grids']

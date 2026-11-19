@@ -79,7 +79,7 @@ def d_rewards_nd(gres, starts, ends, beta=1, mode='Decision'):
     is_end = np.isin(clusters, ends)
     bonus = np.zeros(len(mapped))
     bonus[is_end] = _time_weight(_scaled(pseudotime[is_end]), beta, mode)
-    gres.qlearning['reward_key'] = '.'.join(ends)
+    gres.qlearning['reward_key'] = '.'.join(map(str, ends))
     gres.grids['ends_cluster_grids'] = _cluster_grids(gres, ends)
     gres.grids['starts_cluster_grids'] = _cluster_grids(gres, starts)
     gres.qlearning[f'd_{mode}_rewards'] = _table(gres, bonus)

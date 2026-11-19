@@ -233,3 +233,31 @@ def test_2d_reward_functions_accept_a_single_cluster_name(scan2d):
     scRL.c_rewards(named, reward_keys=['geneA'], starts='root')
     pd.testing.assert_frame_equal(named.qlearning['c_Decision_rewards'], listed.qlearning['c_Decision_rewards'])
     assert list(named.grids['starts_cluster_grids']) == list(listed.grids['starts_cluster_grids'])
+
+
+def test_empty_start_name_means_no_start(scan2d):
+    nd = lattice_from_scan(scan2d)
+    for gres in (scan2d, nd):
+        scRL.c_rewards(gres, reward_keys=['geneA'], starts='')
+        assert gres.grids['starts_cluster_grids'] is None
+
+
+INT_CODES = {'root': 0, 'trunk': 1, 'branchA': 2, 'branchB': 3}
+
+
+@pytest.mark.parametrize('d', [2, 3])
+def test_integer_cluster_names(d, scan2d, tree3d):
+    import copy
+    if d == 2:
+        gres, labels = scan2d, make_tree(d=2)[1]
+    else:
+        gres, labels = scRL.grids_from_embedding(tree3d[0]), tree3d[1]
+    scRL.project_cluster(gres, pd.Series(pd.Categorical([INT_CODES[c] for c in labels])))
+    seed_all(0); scRL.align_pseudotime(gres, 0, boundary=False)
+    listed, named = gres, copy.deepcopy(gres)
+    scRL.d_rewards(listed, starts=[0], ends=[2])
+    scRL.d_rewards(named, starts=0, ends=[2])
+    pd.testing.assert_frame_equal(named.qlearning['d_Decision_rewards'], listed.qlearning['d_Decision_rewards'])
+    for key in ('starts_cluster_grids', 'ends_cluster_grids'):
+        assert list(named.grids[key]) == list(listed.grids[key]) and len(listed.grids[key]) > 0
+    assert named.qlearning['reward_key'] == listed.qlearning['reward_key'] == '2'
