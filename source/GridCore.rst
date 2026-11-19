@@ -10,3 +10,5 @@ GridCore
     scRL.GridCore.align_pseudotime
     scRL.GridCore.project_back
     scRL.GridCore.project
+    scRL.GridNDCore.grids_nd
+    scRL.PlotCore.plot_grids

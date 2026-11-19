@@ -8,6 +8,7 @@ EnvironmentCore
     scRL.EnvironmentCore.deepEnv
     scRL.EnvironmentCore.d_rewards
     scRL.EnvironmentCore.c_rewards
+    scRL.EnvironmentNDCore.deepEnvND
 
 Utils
 -----

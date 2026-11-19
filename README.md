@@ -15,7 +15,7 @@
 ### Key Features
 
 - **Actor-Critic Architecture**: Uses deep reinforcement learning to model cellular differentiation trajectories
-- **Grid-Based Embedding**: Transforms high-dimensional single-cell data into an interpretable 2D manifold
+- **Grid-Based Embedding**: Transforms high-dimensional single-cell data into an interpretable 2-D or 3-D grid
 - **Fate Decision Detection**: Identifies early decision points that precede overt lineage commitment
 - **Multiple Analysis Modes**:
   - **Gene Module**: Analyzes gene expression patterns and regulatory roles
@@ -116,6 +116,30 @@ adata.obs['decision_value'] = gres.embedding['decision_value']
 ```
 
 The cluster labels come from the tutorial's Leiden clustering, where cluster `'4'` holds the starting cells and `'0'`, `'3'` and `'5'` are the myeloid target clusters. Leiden labels depend on the clustering run, so set `early_cluster`, `starts` and `ends` from the clusters in your own data.
+
+## 3-D grids
+
+The same pipeline runs on a 3-D embedding, for example a three-component UMAP. `grids_from_embedding` keeps the grid points where cells lie and adds one layer of grid points around them, which forms the boundary of the grid. The grid is built the same way for any 3-D embedding.
+
+```python
+sc.tl.umap(adata, n_components=3)
+X3 = adata.obsm['X_umap']
+
+gres = scRL.grids_from_embedding(X3)                 # 3-D regular grid over the embedding
+scRL.project_cluster(gres, clusters)
+scRL.align_pseudotime(gres, early_cluster='4')
+scRL.d_rewards(gres, starts=['4'], ends=['0', '3', '5'], mode='Decision')
+trainer = scRL.trainer('ActorCritic', gres, reward_type='d', reward_mode='Decision',
+                       starts_prob=False, X_latent=X_pca, num_episodes=5000)
+returns, values = trainer.train()
+scRL.get_state_value(gres, trainer, key='decision_value')
+scRL.project_back(gres, 'decision_value')
+scRL.plot_grids(gres, key='decision_value')          # grid points coloured by decision value
+```
+
+In 3-D the agent moves one grid step along one axis at a time, so it has six moves instead of the eight of the 2-D grid. `n` is the number of grid points across the widest axis of the data (30 by default in 3-D), and `radius` sets how far from the cells the grid extends, in grid steps. `scRL.plot_grids` draws the grid, or the cells, coloured by any stored value; `interactive=True` gives a figure you can rotate (needs plotly). As in 2-D, training outcomes vary between random seeds, so look at the return curve and repeat the training with a few seeds. 4-D and 5-D embeddings are also accepted, but this is experimental.
+
+A complete script on the paul15 data is in `examples/grid3d_paul15.py`.
 
 ## Documentation
 

@@ -114,3 +114,6 @@ venv.bak/
 
 # Cython debug symbols
 cython_debug/
+
+# Figure written by examples/grid3d_paul15.py
+examples/grid3d_decision.png

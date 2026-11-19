@@ -86,6 +86,7 @@ scRL: Utilizing Reinforcement Learning to Evaluate Fate Decisions in Single-Cell
    notebook/Contribution_vs_Decision_Example
    notebook/Application1
    notebook/Application2
+   grid3d
 
 .. toctree::
    :maxdepth: 2
