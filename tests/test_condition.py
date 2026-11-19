@@ -89,73 +89,122 @@ def test_abundance_across_samples(setup):
         scRL.compare_abundance(gres, 'A', 'B', samples=np.array([f'{c}0' for c in same]), n_shuffles=2)
 
 
-def test_condition_grid_inherits_and_pays_the_same(setup):
+def test_condition_grid_labels_from_own_cells(setup):
     gres, labels, Z, conditions = _fresh(setup)
     scRL.project_conditions(gres, conditions)
     scRL.d_rewards(gres, starts=['root'], ends=['branchA'])
     sub = condition_grid(gres, 'A')
     pos = sub.grids['parent_positions']
     assert set(sub.grids['mapped_grids']) <= set(gres.grids['mapped_grids'])
-    assert (sub.grids['mapped_grids_clusters'] == gres.grids['mapped_grids_clusters'][pos]).all()
     np.testing.assert_array_equal(sub.grids['pseudotime'].to_numpy(),
                                   gres.grids['pseudotime'].loc[sub.grids['mapped_grids']].to_numpy())
-    R, nb = gres.qlearning['d_Decision_rewards'].to_numpy(), gres.grids['neighbors']
-    pay = {}
-    for p, a in zip(*np.nonzero(nb >= 0)):
-        pay.setdefault(nb[p, a], set()).add(R[p, a])
-    assert all(len(v) == 1 for v in pay.values())
-    Rs, nbs = sub.qlearning['d_Decision_rewards'].to_numpy(), sub.grids['neighbors']
-    for p, a in zip(*np.nonzero(nbs >= 0)):
-        assert Rs[p, a] == next(iter(pay[pos[nbs[p, a]]]))
-    assert (Rs[nbs < 0] == -1).all()
     mask = conditions == 'A'
+    X, own = gres.embedding['embedding'][mask], labels[mask]
+    points = gres.grids['grids'][sub.grids['mapped_grids']]
+    for p in np.random.default_rng(4).choice(len(points), 30, replace=False):
+        assert sub.grids['mapped_grids_clusters'][p] == own[np.argmin(np.linalg.norm(X - points[p], axis=1))]
+    assert (np.asarray(sub.grids['mapped_grids_clusters']) != 'branchB').all()
+    assert not [k for k in sub.qlearning if k.endswith('_rewards')]
+    assert 'starts_cluster_grids' not in sub.grids
+    scRL.d_rewards(sub, starts=['root'], ends=['branchA'])
     env = deepEnvND(sub, Z[mask], KNN=10, reward_type='d', reward_mode='Decision', starts_probs=False)
     env.reset()
     env.step(0)
-    assert (np.asarray(sub.grids['mapped_grids_clusters']) != 'branchB').mean() > .9
 
 
 def test_condition_grid_on_a_scan_grid(scan2d):
     conditions = np.where(np.arange(600) % 3 == 0, 'A', 'B')
     scRL.project_conditions(scan2d, conditions)
-    scRL.d_rewards(scan2d, starts=['root'], ends=['branchA'])
     sub = condition_grid(scan2d, 'B')
     assert 'neighbors' in sub.grids and set(sub.grids['mapped_grids']) <= set(scan2d.grids['mapped_grids'])
+    scRL.d_rewards(sub, starts=['root'], ends=['branchA'])
     assert np.isfinite(scRL.exact_values(sub)).all()
     with pytest.raises(ValueError):
         condition_grid(scan2d, 'C')
 
 
-def test_compare_values_finds_the_lost_branch(setup):
-    gres, labels, Z, conditions = _fresh(setup)
-    scRL.project_conditions(gres, conditions)
-    scRL.d_rewards(gres, starts=['root'], ends=['branchB'], mode='Contribution')
-    table = scRL.compare_values(gres, 'A', 'B', reward_mode='Contribution', n_shuffles=20)
-    assert table.loc['trunk', 'effect'] < 0 and abs(table.loc['trunk', 'z']) > 3
-    assert table.loc['trunk', 'relative'] < 0 and list(table.columns)[:3] == ['shared_points', 'effect', 'relative']
-    M = len(gres.grids['mapped_grids'])
-    for suffix in ('A', 'B', 'effect', 'z'):
-        assert gres.grids[f'cond_branchB_{suffix}'].shape == (M,)
-    shared = ~np.isnan(gres.grids['cond_branchB_effect'])
-    assert shared.any() and np.isnan(gres.grids['cond_branchB_z'][~shared]).all()
-    pd.testing.assert_frame_equal(table, scRL.compare_values(gres, 'A', 'B', reward_mode='Contribution',
-                                                             n_shuffles=20))
-    # Decision rewards pay most at the entry of the lineage, and the base of the lost branch is still on A's map
-    scRL.d_rewards(gres, starts=['root'], ends=['branchB'])
-    table = scRL.compare_values(gres, 'A', 'B', n_shuffles=5)
-    assert np.isfinite(table[['effect', 'z']].to_numpy()).all()
+def _overlapping_loss(seed=0):
+    """
+    branchB's territory also holds cells of a neutral cluster 'other' in both conditions; condition A has lost
+    every remaining branchB cell.
+    """
+    X, labels, Z, genes = make_tree(n_cells=1500, d=3, seed=1)
+    rng = np.random.default_rng(seed)
+    labels = labels.astype(object)
+    in_b = np.flatnonzero(labels == 'branchB')
+    labels[rng.choice(in_b, int(.4 * len(in_b)), replace=False)] = 'other'
+    gres = scRL.grids_from_embedding(X)
+    scRL.project_cluster(gres, pd.Series(pd.Categorical(labels.astype(str))))
+    seed_all(0); scRL.align_pseudotime(gres, 'root', boundary=False)
+    conditions = np.where(rng.random(len(labels)) < .5, 'A', 'B')
+    conditions[labels == 'branchB'] = 'B'
+    return gres, labels, conditions
+
+
+@pytest.fixture(scope='module')
+def overlap():
+    return _overlapping_loss()
 
 
 @pytest.mark.parametrize('mode', ['Decision', 'Contribution'])
-def test_compare_values_present_branch(setup, mode):
+def test_compare_values_complete_loss_in_shared_territory(overlap, mode):
+    import copy
+    gres, labels, conditions = copy.deepcopy(overlap[0]), overlap[1], overlap[2]
+    scRL.project_conditions(gres, conditions)
+    table = scRL.compare_values(gres, 'A', 'B', ends=['branchB'], starts=['root'], mode=mode, n_shuffles=20)
+    trunk = table.loc['trunk']
+    assert trunk['effect'] < 0 and trunk['relative'] < -.2 and abs(trunk['z']) > 3
+    table = scRL.compare_values(gres, 'A', 'B', ends=['branchA'], starts=['root'], mode=mode, n_shuffles=20)
+    assert abs(table.loc['trunk', 'z']) < 3
+    M = len(gres.grids['mapped_grids'])
+    for suffix in ('A', 'B', 'effect', 'z'):
+        assert gres.grids[f'cond_branchA_{suffix}'].shape == (M,)
+    assert not np.isinf(gres.grids['cond_branchA_z']).any()
+
+
+def test_compare_values_without_depletion(setup):
+    gres, labels, Z, _ = _fresh(setup)
+    halves = np.where(np.random.default_rng(7).random(len(labels)) < .5, 'A', 'B')
+    scRL.project_conditions(gres, halves)
+    for end in ('branchA', 'branchB'):
+        table = scRL.compare_values(gres, 'A', 'B', ends=end, starts='root', n_shuffles=20)
+        assert (table['z'].abs().fillna(0) <= 3).all()
+    first = scRL.compare_values(gres, 'A', 'B', ends='branchA', n_shuffles=5)
+    pd.testing.assert_frame_equal(first, scRL.compare_values(gres, 'A', 'B', ends='branchA', n_shuffles=5))
+
+
+def test_compare_values_same_reward_rule_on_both_maps(overlap):
+    import copy
+    from scRL.ConditionCore import _lineage_grid
+    gres, labels, conditions = copy.deepcopy(overlap[0]), overlap[1], overlap[2]
+    scRL.project_conditions(gres, conditions)
+    clusters = np.asarray(gres.grids['mapped_grids_clusters'])
+    t = gres.grids['pseudotime'].loc[gres.grids['mapped_grids']].to_numpy()[clusters == 'branchA']
+    rule = (['branchA'], ['root'], 'Contribution', 1, t.min(), t.max())
+    maps = [_lineage_grid(gres, conditions == c, *rule) for c in ('A', 'B')]
+    pay = []
+    for g in maps:
+        R, nb = g.qlearning['d_Contribution_rewards'].to_numpy(), g.grids['neighbors']
+        entry = {}
+        for p, a in zip(*np.nonzero(nb >= 0)):
+            entry[g.grids['mapped_grids'][nb[p, a]]] = R[p, a]
+        ends = set(np.asarray(g.grids['mapped_grids'])[np.asarray(g.grids['mapped_grids_clusters']) == 'branchA'])
+        pay.append({k: v for k, v in entry.items() if k in ends})
+    common = set(pay[0]) & set(pay[1])
+    assert len(common) > 20 and all(pay[0][k] == pay[1][k] for k in common)
+
+
+def test_z_is_never_infinite():
+    from scRL.ConditionCore import _z
+    z = _z(np.array([0.0, .3, -.2, np.nan]), np.array([0.0, 0.0, .1, 0.0]))
+    assert z[0] == 0 and np.isnan(z[1]) and z[2] == pytest.approx(-2) and np.isnan(z[3])
+
+
+def test_compare_values_errors(setup):
     gres, labels, Z, conditions = _fresh(setup)
     scRL.project_conditions(gres, conditions)
-    scRL.d_rewards(gres, starts=['root'], ends=['branchA'], mode=mode)
-    table = scRL.compare_values(gres, 'A', 'B', reward_mode=mode, n_shuffles=20)
-    assert abs(table.loc['trunk', 'z']) < 3
-    z = gres.grids['cond_branchA_z']
-    shared = ~np.isnan(gres.grids['cond_branchA_effect'])
-    assert not np.isnan(z[shared]).any()
+    with pytest.raises(ValueError, match='branchA'):
+        scRL.compare_values(gres, 'A', 'B', ends=['nowhere'])
 
 
 def test_compare_fates(setup):

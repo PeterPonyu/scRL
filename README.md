@@ -155,7 +155,7 @@ scRL.plot_fates(gres)
 
 ## Comparing conditions
 
-Two conditions are compared on one grid built from all cells. `scRL.project_conditions` counts each condition's cells at every grid point, `scRL.compare_abundance` tests where their numbers differ and reports, per cluster, how many grid points held by one condition only are expected from sampling alone, `scRL.compare_values` compares exact values between the two conditions' maps against a label-shuffling null, and `scRL.plot_conditions` draws the result.
+Two conditions are compared on one grid built from all cells. `scRL.project_conditions` counts each condition's cells at every grid point, `scRL.compare_abundance` tests where their numbers differ and reports, per cluster, how many grid points held by one condition only are expected from sampling alone, `scRL.compare_values(gres, test, reference, ends=[...])` labels each condition's map from its own cells, solves the lineage reward exactly on both maps and compares the values against a label-shuffling null, and `scRL.plot_conditions` draws the result.
 
 ```python
 scRL.project_conditions(gres, adata.obs['condition'])

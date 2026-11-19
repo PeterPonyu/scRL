@@ -12,8 +12,7 @@ grid points, clusters, pseudotime and rewards are the same for both.
     scRL.project_conditions(gres, adata.obs['condition'])
     table = scRL.compare_abundance(gres, test='knockout', reference='control')
     scRL.plot_conditions(gres)
-    scRL.d_rewards(gres, starts=['4'], ends=['3'], mode='Contribution')
-    values = scRL.compare_values(gres, 'knockout', 'control', reward_mode='Contribution')
+    values = scRL.compare_values(gres, 'knockout', 'control', ends=['3'], starts=['4'], mode='Contribution')
 
 Where the cells are
 -------------------
@@ -36,16 +35,16 @@ What the cells can still reach
 ------------------------------
 
 ``scRL.condition_grid`` builds the map of one condition on the same lattice: the grid points near its cells,
-with the cluster labels, pseudotime and rewards of the pooled grid, so that every grid point pays the same
-reward on every map.
+each labelled with the cluster of its nearest cell of that condition, on the pseudotime of the pooled grid.
 
-``scRL.compare_values`` solves the same reward exactly on each condition's map and compares the values where
-both maps have travel points, against the differences obtained after shuffling the condition labels (the
-null). It reports per grid point an effect and a z-score, and per cluster the difference of medians, its size
-relative to the spread of the reference values, a z-score and a p-value. With 'Decision' rewards it asks
-whether a condition still reaches the entry of a lineage; with 'Contribution' rewards whether it still reaches
-its far end. A condition that lost a branch but keeps a few grid points at its base shows the loss in
-'Contribution' mode.
+``scRL.compare_values`` builds a lineage reward on each condition's map from that map's own labels (the grid
+points labelled with ``ends`` pay the time weight of their pseudotime, scaled the same way on every map),
+solves it exactly, and compares the values where both maps have travel points against the differences
+obtained after shuffling the condition labels (the null). It reports per grid point an effect and a z-score,
+and per cluster the difference of medians, its size relative to the spread of the reference values, a z-score
+and a p-value. With 'Decision' rewards it asks whether a condition's cells still reach the entry of their own
+territory of the lineage; with 'Contribution' rewards whether they reach its far end. Where a condition has no
+cells of the lineage there is nothing to reach, and its value toward the lineage falls to zero.
 
 ``scRL.compare_fates`` compares the share of each condition's cells in each lineage (for example the heaviest
 lineage from ``fate_gate``), with bootstrap intervals and a label-permutation p-value.

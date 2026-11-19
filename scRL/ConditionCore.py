@@ -290,9 +290,13 @@ def _grid_for_cells(gres, mask, radius=None):
     new.grids['masked_grids'] = np.flatnonzero(~kept_mask)
     new.grids['parent_positions'] = positions
     attach_lattice(new, shape, lattice.grids['moves'])
-    for key in ('mapped_grids_clusters', 'mapped_grids_colors'):
-        if key in gres.grids:
-            new.grids[key] = np.asarray(gres.grids[key])[positions]
+    if 'mapped_grids_clusters' in gres.grids and 'clusters' in new.embedding:
+        own = np.asarray(new.embedding['clusters'])
+        _, nn = cKDTree(X).query(np.asarray(gres.grids['grids'])[new.grids['mapped_grids']], k=1)
+        new.grids['mapped_grids_clusters'] = own[nn]
+        if 'cluster_colors' in gres.embedding:
+            lut = dict(zip(np.asarray(gres.embedding['clusters']).tolist(), gres.embedding['cluster_colors']))
+            new.grids['mapped_grids_colors'] = np.array([lut[c] for c in own[nn]])
     if 'pseudotime' in gres.grids:
         new.grids['pseudotime'] = pd.Series(gres.grids['pseudotime'].loc[parent[positions]].to_numpy(),
                                             index=parent[positions])
@@ -300,27 +304,6 @@ def _grid_for_cells(gres, mask, radius=None):
             new.grids['pseudotime_span'] = gres.grids['pseudotime_span']
     if 'proj' in gres.grids:
         new.grids['proj'] = gres.grids['proj'].iloc[positions].reset_index(drop=True)
-    kept_set = set(parent[positions].tolist())
-    for key in ('starts_cluster_grids', 'ends_cluster_grids'):
-        if key in gres.grids:
-            value = gres.grids[key]
-            new.grids[key] = None if value is None else [g for g in value if int(g) in kept_set]
-    if 'starts_probs' in gres.grids:
-        probs = np.asarray(gres.grids['starts_probs'], dtype=float)[positions]
-        new.grids['starts_probs'] = probs / probs.sum() if probs.sum() > 0 else probs
-    if 'reward_key' in gres.qlearning:
-        new.qlearning['reward_key'] = gres.qlearning['reward_key']
-    nb_parent, nb_new = lattice.grids['neighbors'], new.grids['neighbors']
-    for key, table in gres.qlearning.items():
-        if not key.endswith('_rewards'):
-            continue
-        R = table.to_numpy(dtype=float)
-        pay = np.zeros(len(parent))
-        valid = nb_parent >= 0
-        pay[nb_parent[valid]] = R[valid]
-        R_new = np.where(nb_new >= 0, pay[positions[np.clip(nb_new, 0, None)]], -1.0)
-        new.qlearning[key] = pd.DataFrame(R_new, index=list(new.grids['mapped_grids']),
-                                          columns=new.grids['actions'])
     return new
 
 
@@ -330,10 +313,12 @@ def condition_grid(gres, condition, radius=None):
 
     Keeps the lattice points within ``radius`` grid steps of that condition's cells plus one rim layer (the
     rule of the occupancy grid), restricted to the kept points of ``gres``. The lattice, grid step, moves and
-    grid indices are those of ``gres``; boundary and travel points are rebuilt. Cluster labels and colours,
-    pseudotime, projected values, start and end points, start probabilities and every reward table are
-    inherited. Reward tables are rebuilt for the new moves from the reward of the grid point moved into, so a
-    grid point pays the same reward on every map.
+    grid indices are those of ``gres``; boundary and travel points are rebuilt. Each kept grid point takes the
+    cluster of its nearest cell of that condition (the rule of ``project_cluster``), so the map shows which
+    lineages the condition's own cells occupy. Pseudotime and projected values are inherited, so that every
+    map runs on one clock. No reward tables, start or end points are carried over: call ``d_rewards`` or
+    ``c_rewards`` on the returned grid to train a learner there (``compare_values`` builds its own rewards, so
+    that both maps are paid by the same rule).
 
     Parameters
     ----------
@@ -357,14 +342,33 @@ def condition_grid(gres, condition, radius=None):
     return _grid_for_cells(gres, np.asarray(labels) == condition, radius)
 
 
-def _difference(gres, mask_test, mask_ref, reward_type, reward_mode, gamma, max_step, radius=None):
+def _lineage_grid(gres, mask, ends, starts, mode, beta, lo, hi, radius=None):
+    """
+    The map of the cells in ``mask`` with the lineage reward built from its own labels: end points are the grid
+    points labelled with ``ends``, paid by the time weight of their pseudotime scaled to [lo, hi].
+    """
+    from .EnvironmentNDCore import _table, _time_weight
+    g = _grid_for_cells(gres, mask, radius)
+    own = np.asarray(g.grids['mapped_grids_clusters'])
+    t = g.grids['pseudotime'].loc[g.grids['mapped_grids']].to_numpy(dtype=float)
+    s = np.clip((t - lo) / (hi - lo), 0, 1) if hi > lo else np.zeros(len(t))
+    bonus = np.where(np.isin(own, ends), _time_weight(s, beta, mode), 0.0)
+    g.qlearning[f'd_{mode}_rewards'] = _table(g, bonus)
+    g.qlearning['reward_key'] = '.'.join(map(str, ends))
+    mapped = np.asarray(g.grids['mapped_grids'])
+    g.grids['starts_cluster_grids'] = list(mapped[np.isin(own, starts)]) if starts else None
+    g.grids['ends_cluster_grids'] = list(mapped[np.isin(own, ends)])
+    return g
+
+
+def _difference(gres, mask_test, mask_ref, rule, gamma, max_step, radius=None):
     """Exact values on two maps and their difference at the shared travel points, over the parent kept points."""
     from .ExactCore import exact_values
     M = len(gres.grids['mapped_grids'])
     values, travel = [], []
     for mask in (mask_test, mask_ref):
-        g = _grid_for_cells(gres, mask, radius)
-        V = exact_values(g, reward_type, reward_mode, gamma, max_step, key_add='_values')
+        g = _lineage_grid(gres, mask, *rule, radius=radius)
+        V = exact_values(g, 'd', rule[2], gamma, max_step, key_add='_values')
         full = np.full(M, np.nan)
         full[g.grids['parent_positions']] = V
         values.append(full)
@@ -375,28 +379,48 @@ def _difference(gres, mask_test, mask_ref, reward_type, reward_mode, gamma, max_
     return values[0], values[1], np.where(shared, values[0] - values[1], np.nan), travel[1]
 
 
-def compare_values(gres, test, reference, reward_type='d', reward_mode='Decision', gamma=.9, max_step=50,
+def _z(effect, sd):
+    """effect / sd; where sd is 0: 0 for a zero effect, NaN otherwise."""
+    with np.errstate(invalid='ignore', divide='ignore'):
+        return np.where(sd > 0, effect / np.where(sd > 0, sd, 1), np.where((sd == 0) & (effect == 0), 0.0, np.nan))
+
+
+def compare_values(gres, test, reference, ends, starts=None, mode='Decision', beta=1, gamma=.9, max_step=50,
                    n_shuffles=200, seed=0, key_add=None):
     """
-    The same reward solved exactly on each condition's own map, compared where both maps have travel points.
+    A lineage reward solved exactly on each condition's own map, compared where both maps have travel points.
 
+    Each condition's map is labelled from its own cells (see ``condition_grid``). On every map the grid points
+    labelled with ``ends`` are the end points; an end point pays the time weight of ``d_rewards`` ('Decision'
+    or 'Contribution', ``beta``) of its pseudotime, scaled over the pseudotime range of the end points of the
+    pooled grid, so that the reward of a grid point depends on its pseudotime in the same way on every map.
     The observed difference (test minus reference) is set against the differences obtained after shuffling
     the two conditions' labels over their cells (sizes kept): per grid point as an effect (observed minus the
     mean of the shuffles) and a z-score, per cluster as the difference of medians with a shuffle p-value.
 
     How to read it: the exact value of a grid point is the discounted distance to the best-paying part of the
-    lineage (see ``exact_values``). With 'Decision' rewards that is the entry of the lineage, so the
-    comparison asks whether a condition still reaches the entry; with 'Contribution' rewards it is the far end,
-    so it asks whether the condition still reaches the end of the lineage. A condition that lost a branch but
-    keeps a few grid points at its base shows the loss in 'Contribution' mode, not in 'Decision' mode.
+    lineage (see ``exact_values``). 'Decision' asks whether the condition's cells still reach the entry of
+    their own territory of the lineage, 'Contribution' whether they reach its far end. Where a condition has no
+    cells of the lineage there is nothing to reach, and its value toward the lineage falls to zero.
 
     Parameters
     ----------
     gres
-        Grids results after ``project_conditions`` and ``d_rewards`` or ``c_rewards``.
+        Grids results after ``project_cluster``, ``align_pseudotime`` and ``project_conditions``.
     test, reference
         The two condition names.
-    reward_type, reward_mode, gamma, max_step
+    ends
+        Cluster name(s) of the lineage's end.
+    starts
+        Cluster name(s) of the start: grid points labelled with them do not stop an episode.
+        (Default: None)
+    mode
+        'Decision' or 'Contribution'.
+        (Default: 'Decision')
+    beta
+        Decay of the time weight.
+        (Default: 1)
+    gamma, max_step
         As in ``exact_values``.
     n_shuffles
         Label shufflings for the null.
@@ -406,20 +430,30 @@ def compare_values(gres, test, reference, reward_type='d', reward_mode='Decision
         (Default: 0)
     key_add
         Prefix of the stored arrays.
-        (Default: None, 'cond_<reward key>')
+        (Default: None, 'cond_' and the end names joined by '.')
 
     Returns
     ----------
-    DataFrame per cluster (one row 'all' without clusters): ``shared_points``, ``effect``, ``relative``
-    (the effect divided by the spread of the reference map's values, 99th minus 1st percentile over its
-    travel points), ``null_sd``, ``z`` (0 where the effect and the null spread are both 0, plus or minus
-    infinity where only the null spread is 0) and ``pvalue``.
-    Stored on the grid (over the kept points, NaN where undefined): the values on each map
-    ``<key>_<test>`` and ``<key>_<reference>``, ``<key>_effect`` and ``<key>_z``.
+    DataFrame per cluster of the pooled grid (one row 'all' without clusters): ``shared_points``, ``effect``,
+    ``relative`` (the effect divided by the spread of the reference map's values, 99th minus 1st percentile
+    over its travel points), ``null_sd``, ``z`` (0 where the effect and the null spread are both 0, NaN where
+    only the null spread is 0) and ``pvalue``. Stored on the grid (over the kept points, NaN where undefined):
+    the values on each map ``<key>_<test>`` and ``<key>_<reference>``, ``<key>_effect`` and ``<key>_z``.
     """
+    from .EnvironmentNDCore import _as_list, _time_weight
+    from .GridNDCore import check_labels
     labels = _conditions(gres, test, reference)
+    if 'mapped_grids_clusters' not in gres.grids:
+        raise ValueError('compare_values needs cluster labels: call project_cluster first.')
+    ends = _as_list(ends)
+    starts = _as_list(starts) if starts else None
+    _time_weight(0.0, beta, mode)
+    check_labels(gres, ends + (starts or []))
+    pooled_ends = np.isin(np.asarray(gres.grids['mapped_grids_clusters']), ends)
+    t = gres.grids['pseudotime'].loc[np.asarray(gres.grids['mapped_grids'])].to_numpy(dtype=float)[pooled_ends]
+    rule = (ends, starts, mode, beta, t.min(), t.max())
     mask_t, mask_r = labels == test, labels == reference
-    V_t, V_r, d, ref_travel = _difference(gres, mask_t, mask_r, reward_type, reward_mode, gamma, max_step)
+    V_t, V_r, d, ref_travel = _difference(gres, mask_t, mask_r, rule, gamma, max_step)
     spread = np.subtract(*np.percentile(V_r[ref_travel], [99, 1]))
     rng = np.random.default_rng(seed)
     pool = np.flatnonzero(mask_t | mask_r)
@@ -429,15 +463,14 @@ def compare_values(gres, test, reference, reward_type='d', reward_mode='Decision
         perm = rng.permutation(pool)
         st, sr = np.zeros(len(labels), bool), np.zeros(len(labels), bool)
         st[perm[:n_test]], sr[perm[n_test:]] = True, True
-        null[i] = _difference(gres, st, sr, reward_type, reward_mode, gamma, max_step)[2]
+        null[i] = _difference(gres, st, sr, rule, gamma, max_step)[2]
     enough = (~np.isnan(null)).sum(0) >= n_shuffles / 2
     with np.errstate(invalid='ignore'), warnings.catch_warnings():
         warnings.simplefilter('ignore', RuntimeWarning)
         mu = np.where(enough, np.nanmean(null, axis=0), np.nan)
         sd = np.where(enough, np.nanstd(null, axis=0), np.nan)
-        effect = d - mu
-        z = np.where(sd > 0, effect / sd, np.where(sd == 0, np.sign(effect) * np.where(effect == 0, 0, np.inf),
-                                                   np.nan))
+    effect = d - mu
+    z = _z(effect, sd)
     clusters, order = _cluster_labels(gres)
     rows = []
     for c in order:
@@ -452,11 +485,10 @@ def compare_values(gres, test, reference, reward_type='d', reward_mode='Decision
         eff = np.median(observed) - medians.mean()
         null_sd = medians.std()
         count = (np.abs(medians - medians.mean()) >= abs(eff)).sum()
-        z_c = eff / null_sd if null_sd > 0 else (0.0 if eff == 0 else np.sign(eff) * np.inf)
         rows.append({'shared_points': len(observed), 'effect': eff,
-                     'relative': eff / spread if spread > 0 else np.nan, 'null_sd': null_sd, 'z': z_c,
-                     'pvalue': (1 + count) / (n_shuffles + 1)})
-    key = key_add or 'cond_' + gres.qlearning['reward_key']
+                     'relative': eff / spread if spread > 0 else np.nan, 'null_sd': null_sd,
+                     'z': float(_z(np.array(eff), np.array(null_sd))), 'pvalue': (1 + count) / (n_shuffles + 1)})
+    key = key_add or 'cond_' + '.'.join(map(str, ends))
     gres.grids[f'{key}_{test}'], gres.grids[f'{key}_{reference}'] = V_t, V_r
     gres.grids[f'{key}_effect'], gres.grids[f'{key}_z'] = effect, z
     return pd.DataFrame(rows, index=order)
