@@ -8,8 +8,9 @@ import copy
 import itertools
 
 import numpy as np
+import pandas as pd
 from scipy import ndimage, sparse
-from scipy.sparse.csgraph import connected_components
+from scipy.sparse.csgraph import connected_components, dijkstra
 from scipy.spatial import cKDTree
 
 V1_ACTIONS_2D = ['R', 'RT', 'T', 'LT', 'L', 'LB', 'B', 'RB']
@@ -223,3 +224,134 @@ def grids_nd(X, n=None, radius=None, moves='auto'):
         print(f'Warning: There are {parts} components in the graph, please consider to reduce the parameter "n" '
               f'or increase "radius".')
     return gres
+
+
+def _positions(gres, grid_index):
+    """Positions in 'mapped_grids' of the given flat grid indices."""
+    mapped = np.asarray(gres.grids['mapped_grids'])
+    order = np.argsort(mapped)
+    return order[np.searchsorted(mapped, np.asarray(grid_index), sorter=order)]
+
+
+def check_labels(gres, names):
+    """Raise ValueError when a cluster name labels no grid point."""
+    present = list(dict.fromkeys(np.asarray(gres.grids['mapped_grids_clusters']).tolist()))
+    missing = [c for c in names if c not in present]
+    if missing:
+        raise ValueError(f'Cluster(s) {missing} label no grid point. Labels present on the grid: {present}')
+
+
+def project_cluster_nd(gres, clusters=None, cluster_colors=None):
+    """n-D version of ``project_cluster``: each kept grid point takes the label of its nearest cell."""
+    import seaborn as sns
+    if clusters is None:
+        print('Warning: No annotation is provided!')
+        return
+    X = gres.embedding['embedding']
+    points = gres.grids['grids'][gres.grids['mapped_grids']]
+    gres.embedding['clusters'] = clusters
+    _, nn = cKDTree(X).query(points, k=1)
+    mapped_grids_clusters = np.asarray(list(clusters))[nn]
+    if cluster_colors is None:
+        cluster_colors = sns.blend_palette([(0.074, 0.403, 0.619),
+                                            (0.670, 0.227, 0.161),
+                                            (0.815, 0.498, 0.172),
+                                            (0.118, 0.486, 0.291),
+                                            (0.435, 0.427, 0.631),
+                                            (0.412, 0.565, 0.635)],
+                                           n_colors=len(np.unique(clusters)))
+    color_lut = dict(zip(clusters.cat.categories, cluster_colors))
+    gres.embedding['cluster_colors'] = np.array([color_lut[i] for i in clusters])
+    gres.grids['mapped_grids_clusters'] = mapped_grids_clusters
+    gres.grids['mapped_grids_colors'] = np.array([color_lut[i] for i in mapped_grids_clusters])
+
+
+def align_pseudotime_nd(gres, early_cluster, n_sample_cells=10, key_add='pseudotime', boundary=True,
+                        early_cell=None):
+    """
+    n-D version of ``align_pseudotime``.
+
+    Pseudotime is the mean number of grid steps from start points sampled in the early cluster, min-max
+    scaled. When the grid has several connected parts, the part holding most sampled start points is used
+    and every other part is attached at its grid point nearest to that part.
+    """
+    mapped_grids = np.asarray(gres.grids['mapped_grids'])
+    mapped_grids_clusters = np.asarray(gres.grids['mapped_grids_clusters'])
+    points = gres.grids['grids'][mapped_grids]
+    if early_cell:
+        _, p = cKDTree(points).query(gres.embedding['embedding'][early_cell], k=1)
+        start_point = [mapped_grids[p]]
+    else:
+        check_labels(gres, [early_cluster])
+        candidates = mapped_grids[np.where(mapped_grids_clusters == early_cluster)[0]]
+        if boundary:
+            on_boundary = list(set(candidates) & set(gres.grids['mapped_boundary']))
+            candidates = on_boundary if len(on_boundary) else candidates
+        start_point = np.random.choice(candidates, n_sample_cells)
+    starts = _positions(gres, start_point)
+    adj = gres.grids['mapped_adj']
+    n_parts, part = connected_components(adj, directed=False)
+    if n_parts == 1:
+        uniq, inv = np.unique(starts, return_inverse=True)
+        t = dijkstra(adj, directed=False, indices=uniq)[inv].mean(0)
+    else:
+        print(f'Warning: The grid graph has {n_parts} components; the component holding most start points is '
+              f'used for pseudo-time aligning and the others are attached at their nearest grid point')
+        main = np.bincount(part[starts], minlength=n_parts).argmax()
+        t = dijkstra(adj, directed=False, indices=np.unique(starts[part[starts] == main])).mean(0)
+        in_main = np.flatnonzero(part == main)
+        tree = cKDTree(points[in_main])
+        for c in range(n_parts):
+            if c == main:
+                continue
+            in_c = np.flatnonzero(part == c)
+            dist, nn = tree.query(points[in_c], k=1)
+            k = dist.argmin()
+            t[in_c] = dijkstra(adj, directed=False, indices=in_c[k])[in_c] + t[in_main[nn[k]]]
+    t = (t - t.min()) / (t.max() - t.min())
+    gres.grids[key_add] = pd.Series(t, index=mapped_grids)
+
+
+def project_back_nd(gres, key, neighbors=15, w=None, negative=False):
+    """n-D version of ``project_back``: Gaussian kernel over the nearest kept grid points of each cell."""
+    X = gres.embedding['embedding']
+    points = gres.grids['grids'][gres.grids['mapped_grids']]
+    k = min(neighbors, len(points))
+    dist, nn = cKDTree(points).query(X, k=k)
+    dist, nn = dist.reshape(len(X), k), nn.reshape(len(X), k)
+    sigma = dist.std(1, keepdims=True)
+    weight = np.exp(-dist ** 2 / (2 * sigma ** 2))
+    weight = weight / weight.sum(1, keepdims=True)
+    val = (weight * np.asarray(gres.grids[key])[nn]).sum(1)
+    if w:
+        val = val * np.log(w)
+    if negative:
+        gres.embedding[key] = val
+    else:
+        gres.embedding[key] = (val - val.min()) / (val.max() - val.min())
+
+
+def project_nd(gres, data, neighbors=15):
+    """n-D version of ``project``: Gaussian kernel over the nearest cells of each kept grid point."""
+    gres.embedding['data'] = data
+    X = gres.embedding['embedding']
+    points = gres.grids['grids'][gres.grids['mapped_grids']]
+    data = data.reset_index(drop=True)
+    k = min(neighbors, len(X))
+    dist, nn = cKDTree(X).query(points, k=k)
+    dist, nn = dist.reshape(len(points), k), nn.reshape(len(points), k)
+    sigma = dist.std(1, keepdims=True)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        weight = np.exp(-dist ** 2 / (2 * sigma ** 2))
+        total = weight.sum(1, keepdims=True)
+        weight = np.where(total == 0, 0.0, weight / total)
+    rows = np.repeat(np.arange(len(points)), k)
+    W = sparse.csr_matrix((weight.ravel(), (rows, nn.ravel())), shape=(len(points), len(X)))
+    gres.grids['proj'] = pd.DataFrame(W @ data.to_numpy(dtype=float), columns=data.columns)
+
+
+def get_state_nd(gres, X, KNN=10):
+    """Latent vectors of the KNN cells nearest to each kept grid point, (grid points, KNN, latent), mapped order."""
+    points = gres.grids['grids'][gres.grids['mapped_grids']]
+    _, nn = cKDTree(gres.embedding['embedding']).query(points, k=KNN)
+    return np.asarray(X)[nn.reshape(len(points), KNN)]

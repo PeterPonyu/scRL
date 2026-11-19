@@ -6,7 +6,8 @@ import time
 import tqdm
 from joblib import Parallel, delayed
 from .utils import get_dist
-from .GridNDCore import check_embedding, grids_nd
+from .GridNDCore import (check_embedding, grids_nd, is_nd, project_cluster_nd, align_pseudotime_nd,
+                         project_back_nd, project_nd)
 
 class Grids_Results():
     """Container for the grid results
@@ -246,9 +247,11 @@ def project_cluster(gres,
     ----------
     None
     """
+    if is_nd(gres):
+        return project_cluster_nd(gres, clusters, cluster_colors)
     start = time.time()
     X = gres.embedding['embedding']
-    grids = gres.grids['grids'] 
+    grids = gres.grids['grids']
     mapped_boundary = gres.grids['mapped_boundary']
     mapped_grids = gres.grids['mapped_grids']
     if clusters is not None:
@@ -319,6 +322,8 @@ def align_pseudotime(gres,
     ----------
     None
     """
+    if is_nd(gres):
+        return align_pseudotime_nd(gres, early_cluster, n_sample_cells, key_add, boundary, early_cell)
     start = time.time()
     grids = gres.grids['grids']
     mapped_grids = gres.grids['mapped_grids']
@@ -408,6 +413,8 @@ def project_back(gres,
     ----------
     None
     """
+    if is_nd(gres):
+        return project_back_nd(gres, key, neighbors, w, negative)
     X = gres.embedding['embedding']
     grids = gres.grids['grids']
     mapped_grids = gres.grids['mapped_grids']
@@ -454,6 +461,8 @@ def project(gres,
     ----------
     None
     """
+    if is_nd(gres):
+        return project_nd(gres, data, neighbors)
     gres.embedding['data'] = data
     X = gres.embedding['embedding']
     grids = gres.grids['grids']
