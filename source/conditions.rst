@@ -12,6 +12,7 @@ grid points, clusters, pseudotime and rewards are the same for both.
     scRL.project_conditions(gres, adata.obs['condition'])
     table = scRL.compare_abundance(gres, test='knockout', reference='control')
     scRL.plot_conditions(gres)
+    scRL.plot_projections(gres, key='abundance_call')   # the calls seen along each axis
     values = scRL.compare_values(gres, 'knockout', 'control', ends=['3'], starts=['4'], mode='Contribution')
 
 Where the cells are
@@ -29,7 +30,9 @@ points observed next to the number expected after shuffling the condition labels
 "by chance" columns). Only an excess over the by-chance number points to a real difference.
 
 ``scRL.plot_conditions`` draws where each condition is, the log2 fold change of the cell numbers, the calls
-per cluster and the observed against the shuffled one-condition points.
+per cluster and the observed against the shuffled one-condition points. ``scRL.plot_projections(gres,
+key='abundance_call')`` is the clearest single summary: along each axis it shows the most frequent call
+(depleted, enriched, no difference, too few cells) in the colours of the calls.
 
 What the cells can still reach
 ------------------------------

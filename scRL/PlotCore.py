@@ -50,32 +50,58 @@ class _Layer(tuple):
     """
     A point set to draw: (coordinates, colour, values, labels). ``colour`` is one colour or one per point;
     ``values`` are numbers for a colour map; ``labels`` is a categorical of category names (its categories give
-    the legend order). ``size`` scales the marker area.
+    the legend order). ``size`` scales the marker area; ``names`` holds the cluster of each point, if known.
     """
     size = 1.0
+    names = None
 
 
-def _layer(coords, colour, values, labels, size=1.0):
+def _layer(coords, colour, values, labels, size=1.0, names=None):
     layer = _Layer((coords, colour, values, labels))
     layer.size = size
+    layer.names = names
     return layer
 
 
-def _category_layer(gres, coords, labels, key, cells):
-    """Layer coloured by category: the stored colour dict ``<key>_colors`` when present, else tab10/tab20/husl."""
-    labels = np.asarray(labels).astype(str)
-    present = sorted(set(labels))
+def _sub(names, mask):
+    return None if names is None else np.asarray(names)[mask]
+
+
+def _category_layer(gres, coords, labels, key, cells, order=None, names=None):
+    """
+    Layers coloured by category: the stored colour dict ``<key>_colors`` when present, else tab10/tab20/husl.
+    Missing labels (NaN, None) go to a small grey layer drawn first. ``order`` is the category order of a
+    categorical; plain strings are sorted.
+    """
+    raw = np.asarray(labels, dtype=object)
+    missing = pd.isna(raw)
+    if missing.all():
+        raise ValueError(f'{key!r} has no values to draw: every value is missing.')
+    labels = raw[~missing].astype(str)
+    present = set(labels.tolist())
+    base = [str(c) for c in order if str(c) in present] if order is not None else sorted(present)
     stored = (gres.embedding if cells else gres.grids).get(key + '_colors')
     if isinstance(stored, dict) and stored:
         stored = {str(k): v for k, v in stored.items()}
-        order = [c for c in stored if c in present] + [c for c in present if c not in stored]
-        missing = [c for c in order if c not in stored]
-        lut = {**stored, **dict(zip(missing, _palette(len(missing))))}
+        first = base if order is not None else [c for c in stored if c in present]
+        rest = [c for c in base if c not in first]
+        order = first + rest
+        missing_colours = [c for c in order if c not in stored]
+        lut = {**stored, **dict(zip(missing_colours, _palette(len(missing_colours))))}
     else:
-        order = present
-        lut = dict(zip(present, _palette(len(present))))
+        order = base
+        lut = dict(zip(order, _palette(len(order))))
     from matplotlib.colors import to_rgba_array
-    return _layer(coords, to_rgba_array([lut[c] for c in labels]), None, pd.Categorical(labels, categories=order))
+    layers = [_layer(coords[missing], GREY, None, None, .5, _sub(names, missing))] if missing.any() else []
+    return layers + [_layer(coords[~missing], to_rgba_array([lut[c] for c in labels]), None,
+                            pd.Categorical(labels, categories=order), names=_sub(names, ~missing))]
+
+
+def _category_order(values):
+    """The categories of a categorical (Series or array), else None."""
+    if isinstance(getattr(values, 'dtype', None), pd.CategoricalDtype):
+        return list(values.cat.categories) if isinstance(values, pd.Series) else list(values.categories)
+    return None
 
 
 def _palette(n):
@@ -88,46 +114,52 @@ def _palette(n):
     return list(sns.husl_palette(n))
 
 
-def _value_layers(coords, values, key):
+def _value_layers(coords, values, key, names=None):
     """Layers for numeric values: the points without a value (NaN) first, small and grey, then the others."""
     missing = np.isnan(values)
     if missing.all():
         raise ValueError(f'{key!r} has no values to draw: every value is NaN.')
-    layers = [_layer(coords[missing], GREY, None, None, .5)] if missing.any() else []
-    return layers + [_layer(coords[~missing], None, values[~missing], None)]
+    layers = [_layer(coords[missing], GREY, None, None, .5, _sub(names, missing))] if missing.any() else []
+    return layers + [_layer(coords[~missing], None, values[~missing], None, names=_sub(names, ~missing))]
 
 
 def _layers(gres, key, cells, dims, rim):
     """Point sets to draw (see ``_Layer``)."""
     if cells:
         X = np.asarray(gres.embedding['embedding'])[:, dims]
+        names = np.asarray(gres.embedding['clusters']).astype(str) if 'clusters' in gres.embedding else None
         if key is None:
-            return [_layer(X, GREY, None, None)]
+            return [_layer(X, GREY, None, None, names=names)]
         if key == 'clusters':
             return [_layer(X, np.asarray(gres.embedding['cluster_colors']), None,
-                           pd.Categorical(np.asarray(gres.embedding['clusters']), categories=_cluster_order(gres)))]
+                           pd.Categorical(np.asarray(gres.embedding['clusters']), categories=_cluster_order(gres)),
+                           names=names)]
         if key not in gres.embedding:
             raise KeyError(f'{key!r} is not stored for the cells; available keys: '
                            f'{sorted(map(str, gres.embedding))}')
         values = gres.embedding[key]
         if _is_categorical(values):
-            return [_category_layer(gres, X, values, key, True)]
-        return _value_layers(X, np.asarray(values, dtype=float), key)
+            return _category_layer(gres, X, values, key, True, _category_order(values), names)
+        return _value_layers(X, np.asarray(values, dtype=float), key, names)
     coords = np.asarray(gres.grids['grids'])
     travel = np.asarray(gres.grids['mapped_travel'])
     boundary = np.asarray(gres.grids['mapped_boundary'])
+    labelled = 'mapped_grids_clusters' in gres.grids
+    names = np.asarray(gres.grids['mapped_grids_clusters'])[_positions(gres, travel)].astype(str) if labelled else None
     if key is None:
-        return [_layer(coords[boundary][:, dims], GREY, None, None), _layer(coords[travel][:, dims], DARK, None, None)]
+        return [_layer(coords[boundary][:, dims], GREY, None, None), _layer(coords[travel][:, dims], DARK, None, None,
+                                                                            names=names)]
     layers = [_layer(coords[boundary][:, dims], GREY, None, None)] if rim else []
     if key == 'clusters':
         p = _positions(gres, travel)
         return layers + [_layer(coords[travel][:, dims], np.asarray(gres.grids['mapped_grids_colors'])[p], None,
                                 pd.Categorical(np.asarray(gres.grids['mapped_grids_clusters'])[p],
-                                               categories=_cluster_order(gres)))]
+                                               categories=_cluster_order(gres)), names=names)]
     values = _raw_grid_values(gres, key, travel)
-    if _is_categorical(values):
-        return layers + [_category_layer(gres, coords[travel][:, dims], values, key, False)]
-    return layers + _value_layers(coords[travel][:, dims], values.astype(float), key)
+    if _is_categorical(gres.grids[key]) or _is_categorical(values):
+        return layers + _category_layer(gres, coords[travel][:, dims], values, key, False,
+                                        _category_order(gres.grids[key]), names)
+    return layers + _value_layers(coords[travel][:, dims], values.astype(float), key, names)
 
 
 def _legend_handles(gres, layers):
@@ -142,21 +174,48 @@ def _legend_handles(gres, layers):
     return [Line2D([], [], ls='', marker='o', color=lut[c], label=str(c)) for c in drawn[0][1].categories if c in lut]
 
 
-def _value_limits(layers, vmin=None, vmax=None, vcenter=None):
-    """Colour limits from the finite values drawn; ``vcenter`` makes them symmetric about it; explicit limits win."""
+def _finite(layers):
     values = [v for _, _, v, _ in layers if v is not None]
     if not values:
-        return vmin, vmax
+        return np.zeros(0)
     finite = np.concatenate(values)
-    finite = finite[np.isfinite(finite)]
+    return finite[np.isfinite(finite)]
+
+
+def _value_limits(layers, vmin=None, vmax=None, vcenter=None, robust=True):
+    """
+    Colour limits from the finite values drawn. ``robust``: the 1st and 99th percentiles, except on a side where
+    no value lies more than 5% of that range beyond the percentile (there the limit stays at the extreme
+    value, so only real outliers are cut off). Otherwise the range. ``vcenter`` makes the limits symmetric
+    about it; explicit limits win.
+    """
+    finite = _finite(layers)
+    if not len(finite):
+        return vmin, vmax
     lo, hi = finite.min(), finite.max()
+    if robust:
+        p1, p99 = np.percentile(finite, [1, 99])
+        margin = .05 * (p99 - p1)
+        lo = p1 if lo < p1 - margin else lo
+        hi = p99 if hi > p99 + margin else hi
     if vcenter is not None:
         half = max(abs(lo - vcenter), abs(hi - vcenter))
         lo, hi = vcenter - half, vcenter + half
     return (lo if vmin is None else vmin), (hi if vmax is None else vmax)
 
 
+def _extend(layers, lo, hi):
+    """Which ends of the colour bar need an arrow: values fall outside the limits there."""
+    finite = _finite(layers)
+    if not len(finite) or lo is None or hi is None:
+        return 'neither'
+    low, high = (finite < lo).any(), (finite > hi).any()
+    return 'both' if low and high else 'min' if low else 'max' if high else 'neither'
+
+
 def _scatter(ax, coords, colour, values, s, cmap, vmin=None, vmax=None, **kw):
+    if ax.name == '3d':
+        kw.setdefault('depthshade', False)
     if values is None:
         return ax.scatter(*coords.T, s=s, lw=0, color=colour, **kw)
     return ax.scatter(*coords.T, s=s, lw=0, c=values, cmap=cmap, vmin=vmin, vmax=vmax, **kw)
@@ -171,13 +230,16 @@ def _style_3d(ax, dims, view, coords):
         axis.set_ticklabels([])
         axis.set_label_text(f'Dim {d + 1}')
         axis.labelpad = -8
+        axis.set_pane_color((1, 1, 1, 1))
+        axis._axinfo['grid'].update(color='#e3e3e3', linewidth=.4)
     if abs(view[0]) >= 85:                    # looking along the third axis: its name has no place
         ax.zaxis.label.set_visible(False)
         ax.set_zticks([])
 
 
 def plot_grids(gres, key=None, cells=False, dims=(0, 1, 2), view=(22, -58), ax=None, cmap='plasma',
-               s=None, rim=False, interactive=False, title=None, colorbar=True, vmin=None, vmax=None, vcenter=None):
+               s=None, rim=False, interactive=False, title=None, colorbar=True, vmin=None, vmax=None, vcenter=None,
+               robust=True, label=None, alpha=1):
     """
     Draw the grid, or the cells, coloured by a stored value.
 
@@ -232,6 +294,16 @@ def plot_grids(gres, key=None, cells=False, dims=(0, 1, 2), view=(22, -58), ax=N
     vcenter
         Value at the centre of the colour scale: the limits are made symmetric about it.
         (Default: None)
+    robust
+        Colour limits at the 1st and 99th percentile of the values drawn, so that a few outliers do not take
+        the colour range; the colour bar shows arrows where values fall outside. False: minimum and maximum.
+        (Default: True)
+    label
+        Colour bar label.
+        (Default: None, the key)
+    alpha
+        Opacity of the points.
+        (Default: 1)
 
     Returns
     ----------
@@ -242,24 +314,31 @@ def plot_grids(gres, key=None, cells=False, dims=(0, 1, 2), view=(22, -58), ax=N
     dims = list(dims) if three else [0, 1]
     if interactive:
         keys = key if isinstance(key, (list, tuple)) else [key]
-        return _plotly(gres, keys, cells, rim, three, cmap, s, title, colorbar, dims, vmin, vmax, vcenter)
+        return _plotly(gres, keys, cells, rim, three, cmap, s, title, colorbar, dims, vmin, vmax, vcenter, robust,
+                       label)
     if isinstance(key, (list, tuple)):
         raise ValueError('A list of keys needs interactive=True; draw one key at a time otherwise.')
     layers = _layers(gres, key, cells, dims, rim)
-    if ax is None:
-        fig = plt.figure(figsize=(6.5, 5.5) if three else (5, 5))
-        ax = fig.add_subplot(projection='3d' if three else None)
+    handles = _legend_handles(gres, layers)
+    own = ax is None
+    if own:
         if three:
-            fig.subplots_adjust(left=0, right=.85, bottom=.02, top=.92)
+            strip = _legend_width(handles) if (colorbar and handles) else 1.0
+            fig = plt.figure(figsize=(4.2 + strip, 4.6))
+            right = 4.2 / fig.get_figwidth()
+            ax = fig.add_axes([0, 0, right, .95], projection='3d')
+        else:
+            fig = plt.figure(figsize=(5, 5))
+            ax = fig.add_subplot()
     elif three and ax.name != '3d':
         raise ValueError(f'A {ndim}-D grid needs a 3-D axes, for example fig.add_subplot(projection=\'3d\').')
     if s is None:
         s = 4 if cells else (8 if three else 12)
-    lo, hi = _value_limits(layers, vmin, vmax, vcenter)
+    lo, hi = _value_limits(layers, vmin, vmax, vcenter, robust)
     mappable = None
     for layer in layers:
         coords, colour, values, _ = layer
-        artist = _scatter(ax, coords, colour, values, s * layer.size, cmap, lo, hi)
+        artist = _scatter(ax, coords, colour, values, s * layer.size, cmap, lo, hi, alpha=alpha)
         if values is not None:
             mappable = artist
     if three:
@@ -270,58 +349,73 @@ def plot_grids(gres, key=None, cells=False, dims=(0, 1, 2), view=(22, -58), ax=N
         ax.set_yticklabels([])
         ax.set_xlabel(f'Dim {dims[0] + 1}')
         ax.set_ylabel(f'Dim {dims[1] + 1}')
-    handles = _legend_handles(gres, layers)
+    fig = ax.figure
     if colorbar and handles:
-        ax.legend(handles=handles, loc='upper left', bbox_to_anchor=(1.02, 1), frameon=False)
+        if own and three:
+            fig.legend(handles=handles, loc='center left', bbox_to_anchor=(right, .5), frameon=False)
+        else:
+            ax.legend(handles=handles, loc='upper left', bbox_to_anchor=(1.02, 1), frameon=False)
     elif colorbar and mappable is not None:
-        ax.figure.colorbar(mappable, ax=ax, shrink=.6, pad=.02 if three else .05)
+        kw = dict(label=key if label is None else label, extend=_extend(layers, lo, hi))
+        if own and three:
+            fig.colorbar(mappable, cax=fig.add_axes([right + .15 / fig.get_figwidth(), .225, .12 / fig.get_figwidth(),
+                                                     .55], label='<colorbar>'), **kw)
+        else:
+            fig.colorbar(mappable, ax=ax, shrink=.6, pad=.02 if three else .05, **kw)
     if title is not None:
         ax.set_title(title)
     return ax
 
 
-def _plotly(gres, keys, cells, rim, three, cmap, s, title, colorbar, dims, vmin=None, vmax=None, vcenter=None):
+def _plotly(gres, keys, cells, rim, three, cmap, s, title, colorbar, dims, vmin=None, vmax=None, vcenter=None,
+            robust=True, label=None):
     try:
         import plotly.graph_objects as go
     except ImportError:
         raise ImportError('plot_grids(interactive=True) needs plotly: pip install plotly') from None
     from matplotlib.colors import to_hex
 
-    def trace(coords, colour, values, visible=True, limits=(None, None), size=1.0):
+    def trace(layer, key, visible=True, limits=(None, None)):
+        coords, colour, values, labels = layer
+        name = str(key)
         if values is not None:
-            marker = dict(color=values, colorscale=cmap, showscale=colorbar, cmin=limits[0], cmax=limits[1])
+            marker = dict(color=values, colorscale=cmap, showscale=colorbar, cmin=limits[0], cmax=limits[1],
+                          colorbar=dict(title=name if label is None else label))
+            shown = [f'{name}: {v:.3g}' for v in values]
         elif np.ndim(colour) > 1:
             marker = dict(color=[to_hex(c) for c in colour])
+            shown = [f'{name}: {v}' for v in np.asarray(labels)] if labels is not None else [''] * len(coords)
         else:
             marker = dict(color=to_hex(colour))
-        marker['size'] = (np.sqrt(s) if s else 3) * np.sqrt(size)
+            shown = [f'{name}: missing' if layer.size < 1 else ''] * len(coords)
+        if layer.names is not None:
+            shown = [f'{t}<br>cluster: {c}' if t else f'cluster: {c}' for t, c in zip(shown, layer.names)]
+        marker['size'] = (np.sqrt(s) if s else 3) * np.sqrt(layer.size)
         xyz = dict(zip('xyz', coords.T))
-        return (go.Scatter3d(mode='markers', marker=marker, visible=visible, **xyz) if three
-                else go.Scatter(mode='markers', marker=marker, visible=visible, **xyz))
+        kw = dict(mode='markers', marker=marker, visible=visible, text=shown, hovertemplate='%{text}<extra></extra>')
+        return go.Scatter3d(**kw, **xyz) if three else go.Scatter(**kw, **xyz)
 
+    traces, groups = [], []
+    for i, k in enumerate(keys):
+        layers = _layers(gres, k, cells, dims, rim if len(keys) == 1 else False)
+        limits = _value_limits(layers, vmin, vmax, vcenter, robust)
+        traces += [trace(layer, k, visible=i == 0, limits=limits) for layer in layers]
+        groups += [i] * len(layers)
+    fig = go.Figure(traces)
     if len(keys) == 1:
-        layers = _layers(gres, keys[0], cells, dims, rim)
-        limits = _value_limits(layers, vmin, vmax, vcenter)
-        traces = [trace(*layer[:3], limits=limits, size=layer.size) for layer in layers]
-        fig = go.Figure(traces)
-        fig.update_layout(title=title)
+        fig.update_layout(title=title, margin=dict(l=0, r=0, b=0, t=40))
     else:
-        traces = []
-        for i, k in enumerate(keys):
-            layers = _layers(gres, k, cells, dims, False)
-            traces.append(trace(*layers[-1][:3], visible=i == 0, limits=_value_limits(layers, vmin, vmax, vcenter)))
-        fig = go.Figure(traces)
-        buttons = [dict(label=str(k), method='update',
-                        args=[{'visible': [j == i for j in range(len(keys))]}, {'title': str(k)}])
+        buttons = [dict(label=str(k), method='update', args=[{'visible': [g == i for g in groups]}])
                    for i, k in enumerate(keys)]
-        fig.update_layout(title=str(keys[0]), updatemenus=[dict(buttons=buttons, x=0, y=1.12, xanchor='left')])
+        fig.update_layout(updatemenus=[dict(buttons=buttons, x=0, y=1, xanchor='left', yanchor='bottom')],
+                          margin=dict(l=0, r=0, b=0, t=40))
     labels = {f'{a}axis_title': f'Dim {d + 1}' for a, d in zip('xyz', dims)}
     if three:
         fig.update_layout(scene=dict(aspectmode='data', **labels))
     else:
         fig.update_layout(**labels)
         fig.update_yaxes(scaleanchor='x')
-    fig.update_layout(showlegend=False)
+    fig.update_layout(showlegend=False, template='plotly_white')
     return fig
 
 
@@ -366,6 +460,35 @@ def _policy_moves(gres, trainer, travel):
     return move * _lattice_spacing(gres)[0]
 
 
+def _block_field(gres, policy, block_dims, k, groups=None):
+    """
+    The policy averaged over blocks of k grid steps along ``block_dims`` (every other axis collapsed), and over
+    ``groups`` (for example the slab) when given. Blocks need at least 3 travel points (fewer when a block holds
+    fewer lattice positions). Returns the mean position (embedding units), the mean move (grid steps, all axes)
+    and the group of every block.
+    """
+    travel = np.asarray(gres.grids['mapped_travel'])
+    spacing = _lattice_spacing(gres)[0]
+    moves = _policy_moves(gres, policy, travel) / spacing
+    c = _lattice_coords(gres, travel)
+    cells = c[:, list(block_dims)] // k
+    keys = cells if groups is None else np.column_stack([groups, cells])
+    _, block, counts = np.unique(keys, axis=0, return_inverse=True, return_counts=True)
+    block = block.ravel()
+    enough = counts >= min(3, k ** len(block_dims))
+    n = len(counts)
+    tails = np.asarray(gres.grids['grids'])[travel]
+    pos = np.zeros((n, tails.shape[1]))
+    mean = np.zeros((n, moves.shape[1]))
+    np.add.at(pos, block, tails)
+    np.add.at(mean, block, moves)
+    pos, mean = pos / counts[:, None], mean / counts[:, None]
+    group = np.zeros(n) if groups is None else np.zeros(n)
+    if groups is not None:
+        group[block] = groups
+    return pos[enough], mean[enough], group[enough]
+
+
 def _lattice_coords(gres, flat):
     """Integer lattice coordinates (points x axes) of flat grid indices."""
     return np.array(np.unravel_index(np.asarray(flat), _lattice_spacing(gres)[1])).T
@@ -385,6 +508,12 @@ def _thinned_travel(gres, dims, step):
 
 
 ARROW = '#333333'
+
+
+def _across_cmap():
+    """Blue (toward lower values) through dark grey (within the plane) to red (toward higher values)."""
+    from matplotlib.colors import LinearSegmentedColormap
+    return LinearSegmentedColormap.from_list('across', ['#2166ac', '#3a3a3a', '#b2182b'])
 
 
 def _sections(gres, axis, n_slices, dims):
@@ -419,21 +548,16 @@ def _draw_section(ax, k, layers, cut, shown, slab_of, bounds, limits, cmap, vmin
         if vals is not None:
             mappable = artist
     if arrows is not None:
-        tails, moves, length = arrows
-        here = slab_of(tails) == k
-        inplane, across = moves[here][:, shown], moves[here][:, cut]
+        pos, mean, group, step, spacing = arrows
+        here = group == k
+        inplane, across = mean[here][:, shown], mean[here][:, cut]
         size = np.linalg.norm(inplane, axis=1)
-        mostly_across = np.abs(across) > size
-        draw = ~mostly_across & (size > 0)
+        draw = size >= .05
         if draw.any():
-            uv = inplane[draw] / size[draw, None] * length
-            ax.quiver(*tails[here][draw][:, shown].T, *uv.T, angles='xy', scale_units='xy', scale=1,
-                      width=.005, headwidth=3.8, headlength=4, headaxislength=3.6, color=ARROW, alpha=.85, zorder=3)
-        for sign, marker in ((1, '^'), (-1, 'v')):
-            m = mostly_across & (np.sign(across) == sign)
-            if m.any():
-                ax.plot(*tails[here][m][:, shown].T, ls='', marker=marker, ms=4, mfc='white', mec=ARROW, mew=.8,
-                        zorder=3)
+            uv = inplane[draw] * .8 * step * spacing[shown]
+            ax.quiver(*pos[here][draw][:, shown].T, *uv.T, np.clip(across[draw], -1, 1), cmap=_across_cmap(),
+                      clim=(-1, 1), angles='xy', scale_units='xy', scale=1, width=.006, headwidth=3.5,
+                      headlength=4, headaxislength=3.5, zorder=3)
     a, b = bounds(k)
     ax.set_title(f'Dim {cut + 1}: {a:.2f} to {b:.2f}', fontsize=title_size)
     ax.set_xlim(limits[0])
@@ -447,10 +571,10 @@ def _draw_section(ax, k, layers, cut, shown, slab_of, bounds, limits, cmap, vmin
 
 
 def _legend_width(handles):
-    """Width in inches of a one-column legend of these entries at the default font size."""
+    """Width in inches of a one-column legend of these entries at the default font size, with a margin."""
     size = plt.rcParams['legend.fontsize']
     size = plt.rcParams['font.size'] if isinstance(size, str) else size
-    return .6 + .62 * size / 72 * max(len(h.get_label()) for h in handles)
+    return .75 + .62 * size / 72 * max(len(h.get_label()) for h in handles)
 
 
 def _limits(points, pad=.03):
@@ -471,7 +595,8 @@ def _panel_grid(fig_w_extra, ncols, nrows, aspect, panel_w):
 
 
 def plot_slices(gres, key=None, axis=2, n_slices=6, cells=False, dims=(0, 1, 2), cmap='plasma', s=None,
-                ncols=None, figsize=None, policy=None, policy_every=None, vmin=None, vmax=None, vcenter=None):
+                ncols=None, figsize=None, policy=None, policy_every=None, vmin=None, vmax=None, vcenter=None,
+                robust=True, label=None):
     """
     Cut a 3-D (or higher) grid into slabs along one axis and draw each slab as a 2-D section.
 
@@ -513,21 +638,28 @@ def plot_slices(gres, key=None, axis=2, n_slices=6, cells=False, dims=(0, 1, 2),
         Figure size; the panels are then placed by matplotlib.
         (Default: None, from the number of panels and the data aspect)
     policy
-        A trained ``scRL.trainer``, or an integer array of move indices (one per kept grid point): draw the
-        direction the agent tends to move in, as in ``plot_policy``, at travel points on a regular sub-lattice
-        of the slab. Moves mainly in the plane are drawn as
-        arrows 0.8 sub-lattice steps long; moves mainly across the slab as small open markers, ``^`` towards
-        higher and ``v`` towards lower values of the slicing axis.
+        A trained ``scRL.trainer``, or an array of move indices (one per kept grid point): draw the direction
+        the agent tends to move in, averaged over blocks of ``policy_every`` x ``policy_every`` lattice
+        positions of the slab (blocks with at least 3 travel points). Each arrow starts at the mean position
+        of its block and is the mean move in the plane, 0.8 block widths long when all moves agree and
+        shorter when they do not (not drawn below 5% of that). Its colour gives the mean move across the slab:
+        blue toward lower, red toward higher values of the slicing axis, dark grey within the plane.
         (Default: None)
     policy_every
-        Sub-lattice step, in grid steps, of the policy arrows.
-        (Default: None, so that about 15 arrows span the longer side of a panel)
+        Block width, in grid steps, of the policy arrows.
+        (Default: None, so that about 15 blocks span the longer side of a panel)
     vmin, vmax
         Limits of the colour scale.
         (Default: None, from the finite values drawn)
     vcenter
         Value at the centre of the colour scale: the limits are made symmetric about it.
         (Default: None)
+    robust
+        Colour limits that leave out a few outlying values (see ``plot_grids``).
+        (Default: True)
+    label
+        Colour bar label.
+        (Default: None, the key)
 
     Returns
     ----------
@@ -536,21 +668,21 @@ def plot_slices(gres, key=None, axis=2, n_slices=6, cells=False, dims=(0, 1, 2),
     _require_3d(gres, 'plot_slices')
     cut, shown, slab_of, bounds = _sections(gres, axis, n_slices, dims)
     layers = _layers(gres, key, cells, list(range(np.asarray(gres.grids['grids']).shape[1])), rim=False)
-    vmin, vmax = _value_limits(layers, vmin, vmax, vcenter)
+    vmin, vmax = _value_limits(layers, vmin, vmax, vcenter, robust)
     allxy = np.vstack([c[:, shown] for c, _, _, _ in layers])
     limits = _limits(allxy)
     arrows = None
     if policy is not None:
         step = _auto_step(gres, shown) if policy_every is None else int(policy_every)
-        travel = _thinned_travel(gres, shown, step)
-        length = .8 * step * _lattice_spacing(gres)[0][shown].mean()
-        arrows = (np.asarray(gres.grids['grids'])[travel], _policy_moves(gres, policy, travel), length)
+        tails = np.asarray(gres.grids['grids'])[np.asarray(gres.grids['mapped_travel'])]
+        arrows = _block_field(gres, policy, shown, step, slab_of(tails)) + (step, _lattice_spacing(gres)[0])
     handles = _legend_handles(gres, layers)
     ncols = ncols or min(n_slices, 3)
     nrows = int(np.ceil(n_slices / ncols))
     if figsize is None:
         aspect = np.ptp(allxy[:, 1]) / np.ptp(allxy[:, 0])
-        fig, axes, right = _panel_grid(_legend_width(handles) if handles else 1.1, ncols, nrows, aspect, 2.8)
+        fig, axes, right = _panel_grid(_legend_width(handles) if handles else (1.6 if arrows is not None else 1.1),
+                                       ncols, nrows, aspect, 2.8)
     else:
         fig, axes = plt.subplots(nrows, ncols, figsize=figsize, squeeze=False)
         axes, right = list(axes.ravel()), .88
@@ -567,12 +699,23 @@ def plot_slices(gres, key=None, axis=2, n_slices=6, cells=False, dims=(0, 1, 2),
     if handles:
         fig.legend(handles=handles, loc='center left', bbox_to_anchor=(right + .1 / W, .5), frameon=False)
     elif mappable is not None:
-        fig.colorbar(mappable, cax=fig.add_axes([right + .25 / W, .2, .14 / W, .6], label='<colorbar>'), label=key)
+        top = .62 if arrows is not None else .2
+        fig.colorbar(mappable, cax=fig.add_axes([right + .25 / W, top, .14 / W, .8 - top], label='<colorbar>'),
+                     label=key if label is None else label, extend=_extend(layers, vmin, vmax))
+    if arrows is not None:
+        from matplotlib.cm import ScalarMappable
+        from matplotlib.colors import Normalize
+        cax = fig.add_axes([right + .35 / W, .4, .8 / W, .025], label='<colorbar>')
+        bar = fig.colorbar(ScalarMappable(Normalize(-1, 1), _across_cmap()), cax=cax, orientation='horizontal')
+        bar.set_label(f'move along Dim {cut + 1}', fontsize='small')
+        bar.set_ticks([-1, 0, 1])
+        bar.ax.tick_params(labelsize='small')
     return fig
 
 
 def plot_views(gres, key=None, views=((20, -60), (20, 30), (90, -90)), cells=False, dims=(0, 1, 2),
-               cmap='plasma', s=None, figsize=None, vmin=None, vmax=None, vcenter=None):
+               cmap='plasma', s=None, figsize=None, vmin=None, vmax=None, vcenter=None, robust=True, label=None,
+               titles=None):
     """
     The 3-D view of ``plot_grids`` from several angles in one row, with one shared colour bar (or one
     cluster legend).
@@ -608,6 +751,16 @@ def plot_views(gres, key=None, views=((20, -60), (20, 30), (90, -90)), cells=Fal
     vcenter
         Value at the centre of the colour scale: the limits are made symmetric about it.
         (Default: None)
+    robust
+        Colour limits that leave out a few outlying values (see ``plot_grids``).
+        (Default: True)
+    label
+        Colour bar label.
+        (Default: None, the key)
+    titles
+        Panel titles: None gives the view angles in small grey type, a sequence gives one title per view,
+        False gives none.
+        (Default: None)
 
     Returns
     ----------
@@ -617,19 +770,31 @@ def plot_views(gres, key=None, views=((20, -60), (20, 30), (90, -90)), cells=Fal
     n = len(views)
     layers = _layers(gres, key, cells, list(dims), False) if key is not None else []
     handles = _legend_handles(gres, layers) if key is not None else None
-    vmin, vmax = _value_limits(layers, vmin, vmax, vcenter)
-    extra = _legend_width(handles) if handles else 1.4
-    fig = plt.figure(figsize=figsize or (4 * n + extra, 4))
-    right = 1 - extra / fig.get_figwidth()
-    axes = [fig.add_axes([i * right / n, .01, right / n, .9], projection='3d') for i in range(n)]
-    for ax, view in zip(axes, views):
+    vmin, vmax = _value_limits(layers, vmin, vmax, vcenter, robust)
+    extra = _legend_width(handles) if handles else 1.2
+    panel, gap = 3.8, .1
+    fig = plt.figure(figsize=figsize or (n * panel + (n - 1) * gap + extra, 3.9))
+    W = fig.get_figwidth()
+    width = (W - extra - (n - 1) * gap) / n
+    axes = [fig.add_axes([i * (width + gap) / W, .01, width / W, .9], projection='3d') for i in range(n)]
+    if titles is None:
+        names = [f'elev {e}\u00b0, azim {a}\u00b0'.replace('-', '\u2212') for e, a in views]
+    elif titles is False:
+        names = [None] * n
+    else:
+        names = list(titles)
+    for ax, view, name in zip(axes, views, names):
         plot_grids(gres, key=key, cells=cells, dims=dims, view=view, ax=ax, cmap=cmap, s=s, colorbar=False,
-                   title=f'elevation {view[0]}, azimuth {view[1]}', vmin=vmin, vmax=vmax)
+                   vmin=vmin, vmax=vmax)
+        if name:
+            ax.set_title(name, fontsize='small', color='#666666' if titles is None else None)
+    right = (W - extra) / W
     mappables = [c for c in axes[-1].collections if c.get_array() is not None]
     if handles:
         fig.legend(handles=handles, loc='center left', bbox_to_anchor=(right, .5), frameon=False)
     elif key is not None and mappables:
-        fig.colorbar(mappables[-1], cax=fig.add_axes([right + .2 / fig.get_figwidth(), .2, .015, .6], label='<colorbar>'), label=key)
+        fig.colorbar(mappables[-1], cax=fig.add_axes([right + .2 / W, .225, .12 / W, .55], label='<colorbar>'),
+                     label=key if label is None else label, extend=_extend(layers, vmin, vmax))
     return fig
 
 
@@ -649,13 +814,16 @@ def _projection(gres, key, collapse, dims, how):
     origin = np.asarray(gres.grids['grids'])[0]
     xe = origin[shown[0]] + (np.arange(lo[0], hi[0] + 2) - .5) * spacing[shown[0]]
     ye = origin[shown[1]] + (np.arange(lo[1], hi[1] + 2) - .5) * spacing[shown[1]]
-    layer = _layers(gres, key, False, dims, False)[-1] if key is not None else None
-    if layer is not None and layer[3] is not None:
-        labels, colours = np.asarray(layer[3]), layer[1]
-        lut = dict(zip(labels.tolist(), colours))
-        order = {name: i for i, name in enumerate(layer[3].categories)}
+    layers = _layers(gres, key, False, dims, False) if key is not None else []
+    named = [layer for layer in layers if layer[3] is not None]
+    if named:
+        lut = dict(zip(np.asarray(named[0][3]).tolist(), named[0][1]))
+        order = {name: i for i, name in enumerate(named[0][3].categories)}
+        raw = (np.asarray(gres.grids['mapped_grids_clusters'])[_positions(gres, travel)] if key == 'clusters'
+               else _raw_grid_values(gres, key, travel))
+        present = ~pd.isna(np.asarray(raw, dtype=object))
         image = np.zeros((ny * nx, 4))
-        frame = pd.DataFrame({'pix': flat, 'label': labels})
+        frame = pd.DataFrame({'pix': flat[present], 'label': np.asarray(raw, dtype=object)[present].astype(str)})
         for pix, group in frame.groupby('pix'):
             counts = group['label'].value_counts()
             best = sorted(counts.index[counts == counts.max()], key=lambda n: order.get(n, len(order)))[0]
@@ -671,7 +839,7 @@ def _projection(gres, key, collapse, dims, how):
     return np.ma.masked_invalid(grid.reshape(ny, nx)), xe, ye, shown
 
 
-def _draw_projection(ax, data, collapse, how, key, cmap, vmin, vmax, title_size='medium'):
+def _draw_projection(ax, data, collapse, how, key, cmap, vmin, vmax, title_size='medium', n_axes=3):
     image, xe, ye, shown = data
     if image.ndim == 3:
         ax.imshow(image, origin='lower', extent=(xe[0], xe[-1], ye[0], ye[-1]), interpolation='nearest')
@@ -684,8 +852,8 @@ def _draw_projection(ax, data, collapse, how, key, cmap, vmin, vmax, title_size=
         what = 'most frequent cluster' if key == 'clusters' else 'most frequent category'
     else:
         what = how
-    ax.set_title(f'Dim {shown[0] + 1}-Dim {shown[1] + 1} plane, {what} along Dim {collapse + 1}',
-                 fontsize=title_size)
+    along = f'Dim {collapse + 1}' if n_axes <= 3 else 'the other axes'
+    ax.set_title(f'Dim {shown[0] + 1}-Dim {shown[1] + 1} plane, {what} along {along}', fontsize=title_size)
     ax.set_aspect('equal')
     ax.set_xticks([])
     ax.set_yticks([])
@@ -695,7 +863,7 @@ def _draw_projection(ax, data, collapse, how, key, cmap, vmin, vmax, title_size=
 
 
 def plot_projections(gres, key=None, how='max', dims=(0, 1, 2), cmap='plasma', figsize=None, vmin=None, vmax=None,
-                     vcenter=None):
+                     vcenter=None, robust=True, label=None):
     """
     The grid collapsed along each of three axes onto the plane of the other two.
 
@@ -731,6 +899,12 @@ def plot_projections(gres, key=None, how='max', dims=(0, 1, 2), cmap='plasma', f
     vcenter
         Value at the centre of the colour scale: the limits are made symmetric about it.
         (Default: None)
+    robust
+        Colour limits that leave out a few outlying values (see ``plot_grids``).
+        (Default: True)
+    label
+        Colour bar label.
+        (Default: None, the key)
 
     Returns
     ----------
@@ -744,8 +918,8 @@ def plot_projections(gres, key=None, how='max', dims=(0, 1, 2), cmap='plasma', f
     categorical = data[0][0].ndim == 3
     handles = _legend_handles(gres, _layers(gres, key, False, dims, False)) if categorical else None
     if not categorical:
-        finite = [np.ma.compressed(p[0]) for p in data]
-        vmin, vmax = _value_limits([(None, None, np.concatenate(finite), None)], vmin, vmax, vcenter)
+        drawn = [(None, None, np.concatenate([np.ma.compressed(p[0]) for p in data]), None)]
+        vmin, vmax = _value_limits(drawn, vmin, vmax, vcenter, robust and key is not None)
     widths = [p[1][-1] - p[1][0] for p in data]
     heights = [p[2][-1] - p[2][0] for p in data]
     panel_h = 2.6
@@ -758,14 +932,16 @@ def plot_projections(gres, key=None, how='max', dims=(0, 1, 2), cmap='plasma', f
     x, mappable = left, None
     for d, p, w in zip(dims, data, panel_w):
         ax = fig.add_axes([x / W, bottom / H, w / W, panel_h / H])
-        mappable = _draw_projection(ax, p, d, how, key, cmap, vmin, vmax, title_size='small') or mappable
+        mappable = _draw_projection(ax, p, d, how, key, cmap, vmin, vmax, title_size='small',
+                                    n_axes=np.asarray(gres.grids['grids']).shape[1]) or mappable
         x += w + gap
     right = (x - gap) / W
     if handles:
         fig.legend(handles=handles, loc='center left', bbox_to_anchor=(right + .1 / W, .5), frameon=False)
     else:
         fig.colorbar(mappable, cax=fig.add_axes([right + .25 / W, .2, .14 / W, .6], label='<colorbar>'),
-                     label='grid points' if key is None else key)
+                     label=label if label is not None else 'grid points' if key is None else key,
+                     extend=_extend(drawn, vmin, vmax))
     return fig
 
 
@@ -788,7 +964,7 @@ def _clusters(gres, cells):
 
 
 def plot_trend(gres, keys, x='pseudotime', bins=20, cells=True, labels=None, colors=None, ax=None, band=True,
-               clusters=None):
+               clusters=None, xlabel=None, ylabel=None):
     """
     Values along pseudotime (or another value): the median in equal-width bins, with the inter-quartile range.
 
@@ -822,6 +998,9 @@ def plot_trend(gres, keys, x='pseudotime', bins=20, cells=True, labels=None, col
     clusters
         Use only the cells (or grid points) of these clusters, to follow one lineage.
         (Default: None, all)
+    xlabel, ylabel
+        Axis labels.
+        (Default: None, 'Pseudotime' (or the name of ``x``) and 'Value')
 
     Returns
     ----------
@@ -856,8 +1035,8 @@ def plot_trend(gres, keys, x='pseudotime', bins=20, cells=True, labels=None, col
         line, = ax.plot(centres[used], q[:, 1], label=label, color=colour)
         if band:
             ax.fill_between(centres[used], q[:, 0], q[:, 2], color=line.get_color(), alpha=.25, lw=0)
-    ax.set_xlabel(x)
-    ax.set_ylabel('Value')
+    ax.set_xlabel(xlabel if xlabel is not None else 'Pseudotime' if x == 'pseudotime' else x)
+    ax.set_ylabel('Value' if ylabel is None else ylabel)
     ax.legend()
     return ax
 
@@ -887,7 +1066,11 @@ def plot_clusters(gres, key, cells=True, ax=None):
     clusters = _clusters(gres, cells)
     order = pd.Series(values).groupby(clusters).median().dropna().sort_values(ascending=False).index
     if ax is None:
-        ax = plt.figure(figsize=(max(4, .6 * len(order) + 1), 4)).add_subplot()
+        names = [str(c) for c in order]
+        W = max(4, .45 * len(order) + 1)
+        bottom = .3 + .055 * max(len(n) for n in names) * np.sin(np.pi / 4) + .15
+        H = 3 + bottom + .3
+        ax = plt.figure(figsize=(W, H)).add_axes([.8 / W, bottom / H, (W - 1) / W, 3 / H])
     boxes = ax.boxplot([values[(clusters == c) & ~np.isnan(values)] for c in order], patch_artist=True,
                        showfliers=False)
     if 'cluster_colors' in gres.embedding:
@@ -902,12 +1085,15 @@ def plot_clusters(gres, key, cells=True, ax=None):
 def plot_policy(gres, trainer, dims=(0, 1, 2), view=(22, -58), ax=None, every=None, color=ARROW, key=None,
                 cmap='plasma', interactive=False):
     """
-    Arrows showing where the agent tends to move, at travel grid points on a regular sub-lattice.
+    Arrows showing where the agent tends to move.
 
     ActorCritic and SAC: the expected move, the moves weighted by the actor's probabilities at the grid
-    point's state. DDQN and TabularQ: the move with the largest Q-value. On 2-D grids the arrows are the
-    moves in embedding units; on 3-D and higher grids they show the direction only, each 0.8 sub-lattice
-    steps long, over small faint grid points coloured by ``key`` (no points when ``key`` is None).
+    point's state. DDQN and TabularQ: the move with the largest Q-value. On 2-D grids an arrow is drawn at the
+    travel points of a regular sub-lattice, as the move in embedding units. On 3-D and higher grids the moves
+    are averaged over blocks of ``every`` grid steps along each drawn axis (blocks with at least 3 travel
+    points; the other axes are collapsed): each arrow starts at the mean position of its block and is the mean
+    move, 0.8 block widths long when all moves agree and shorter when they do not (not drawn below 5% of
+    that), over small faint grid points coloured by ``key`` (no points when ``key`` is None).
 
     Parameters
     ----------
@@ -926,8 +1112,7 @@ def plot_policy(gres, trainer, dims=(0, 1, 2), view=(22, -58), ax=None, every=No
         Axes to draw into; a 3-D axes for 3-D and higher grids.
         (Default: None, a new figure)
     every
-        Sub-lattice step in grid steps: arrows are drawn at travel points whose lattice coordinates are
-        multiples of ``every``.
+        Sub-lattice step (2-D) or block width (3-D and higher), in grid steps.
         (Default: None, so that about 15 arrows span the longest side of the grid)
     color
         Arrow colour.
@@ -939,7 +1124,7 @@ def plot_policy(gres, trainer, dims=(0, 1, 2), view=(22, -58), ax=None, every=No
         Colour map for ``key``.
         (Default: 'plasma')
     interactive
-        Return a rotatable plotly figure with one cone per arrow (3-D and higher grids, needs plotly).
+        Return a rotatable plotly figure with one cone per block (3-D and higher grids, needs plotly).
         (Default: False)
 
     Returns
@@ -951,10 +1136,10 @@ def plot_policy(gres, trainer, dims=(0, 1, 2), view=(22, -58), ax=None, every=No
     if interactive and not three:
         raise ValueError('interactive policy view needs a 3-D grid')
     step = _auto_step(gres, dims) if every is None else int(every)
-    travel = _thinned_travel(gres, dims, step)
-    arrows = _policy_moves(gres, trainer, travel)[:, dims]
-    tails = np.asarray(gres.grids['grids'])[travel][:, dims]
     if not three:
+        travel = _thinned_travel(gres, dims, step)
+        arrows = _policy_moves(gres, trainer, travel)[:, dims]
+        tails = np.asarray(gres.grids['grids'])[travel][:, dims]
         if key is not None:
             ax = plot_grids(gres, key=key, dims=dims, view=view, ax=ax, cmap=cmap)
         else:
@@ -963,49 +1148,58 @@ def plot_policy(gres, trainer, dims=(0, 1, 2), view=(22, -58), ax=None, every=No
                 c.set_color(GREY)
         ax.quiver(*tails.T, *arrows.T, color=color, angles='xy', scale_units='xy', scale=1, width=.003)
         return ax
-    length = np.linalg.norm(arrows, axis=1)
-    moving = length > 0
-    unit = arrows[moving] / length[moving, None]
-    size = .8 * step * _lattice_spacing(gres)[0][dims].mean()
+    pos, mean, _ = _block_field(gres, trainer, dims, step)
+    spacing = _lattice_spacing(gres)[0]
+    moving = np.linalg.norm(mean[:, dims], axis=1) >= .05
+    vectors = mean[moving][:, dims] * .8 * step * spacing[dims]
+    pos = pos[moving][:, dims]
     if interactive:
-        return _plotly_policy(gres, tails[moving], unit, size, key, dims, cmap)
+        return _plotly_policy(gres, pos, vectors, key, dims, cmap)
     if ax is None:
-        fig = plt.figure(figsize=(6.5, 5.5))
-        ax = fig.add_subplot(projection='3d')
-        fig.subplots_adjust(left=0, right=.85, bottom=.02, top=.92)
+        fig = plt.figure(figsize=(5.4, 4.6))
+        ax = fig.add_axes([0, 0, 4.2 / 5.4, .95], projection='3d')
     if key is not None:
-        points = _layers(gres, key, False, dims, False)[-1]
-        mappable = _scatter(ax, points[0], points[1], points[2], 3, cmap, alpha=.35)
-        if points[3] is None:
-            ax.figure.colorbar(mappable, ax=ax, shrink=.6, pad=.02, label=key)
-        else:
-            ax.legend(handles=_legend_handles(gres, [points]), loc='upper left', bbox_to_anchor=(1.02, 1),
-                      frameon=False)
-    ax.quiver(*tails[moving].T, *(unit * size).T, color=color, lw=1.1, arrow_length_ratio=.45)
+        layers = _layers(gres, key, False, dims, False)
+        lo, hi = _value_limits(layers)
+        mappable = None
+        for layer in layers:
+            artist = _scatter(ax, layer[0], layer[1], layer[2], 3 * layer.size, cmap, lo, hi, alpha=.35)
+            mappable = artist if layer[2] is not None else mappable
+        handles = _legend_handles(gres, layers)
+        if handles:
+            ax.legend(handles=handles, loc='upper left', bbox_to_anchor=(1.02, 1), frameon=False)
+        elif mappable is not None:
+            ax.figure.colorbar(mappable, ax=ax, shrink=.55, pad=.02, label=key, extend=_extend(layers, lo, hi))
+    ax.quiver(*pos.T, *vectors.T, color=color, lw=1.3, arrow_length_ratio=.45)
     _style_3d(ax, dims, view, np.asarray(gres.grids['grids'])[np.asarray(gres.grids['mapped_grids'])][:, dims])
     return ax
 
 
-def _plotly_policy(gres, tails, unit, size, key, dims, cmap):
+def _plotly_policy(gres, pos, vectors, key, dims, cmap):
     try:
         import plotly.graph_objects as go
     except ImportError:
         raise ImportError('plot_policy(interactive=True) needs plotly: pip install plotly') from None
     from matplotlib.colors import to_hex
-    coords, colour, values, _ = _layers(gres, 'clusters' if key == 'clusters' else key, False, dims, False)[-1]
-    if values is not None:
-        marker = dict(size=3, color=values, colorscale=cmap, showscale=True, colorbar=dict(title=key))
-    elif np.ndim(colour) > 1:
-        marker = dict(size=3, color=[to_hex(c) for c in colour])
-    else:
-        marker = dict(size=3, color=to_hex(GREY))
-    points = go.Scatter3d(mode='markers', marker=marker, opacity=.35, hoverinfo='skip',
-                          **dict(zip('xyz', coords.T)))
-    cones = go.Cone(**dict(zip('xyz', tails.T)), **dict(zip('uvw', unit.T)), sizemode='absolute',
-                    sizeref=size, anchor='tail', colorscale=[[0, ARROW], [1, ARROW]], showscale=False)
-    fig = go.Figure([points, cones])
+    traces = []
+    for layer in (_layers(gres, key, False, dims, False) if key is not None else
+                  [_layer(np.asarray(gres.grids['grids'])[np.asarray(gres.grids['mapped_travel'])][:, dims], GREY,
+                          None, None)]):
+        coords, colour, values, _ = layer
+        if values is not None:
+            marker = dict(size=3, color=values, colorscale=cmap, showscale=True, colorbar=dict(title=key))
+        elif np.ndim(colour) > 1:
+            marker = dict(size=3, color=[to_hex(c) for c in colour])
+        else:
+            marker = dict(size=3 * np.sqrt(layer.size), color=to_hex(colour))
+        traces.append(go.Scatter3d(mode='markers', marker=marker, opacity=.35, hoverinfo='skip',
+                                   **dict(zip('xyz', coords.T))))
+    traces.append(go.Cone(**dict(zip('xyz', pos.T)), **dict(zip('uvw', vectors.T)), sizemode='raw', sizeref=1,
+                          anchor='tail', colorscale=[[0, ARROW], [1, ARROW]], showscale=False))
+    fig = go.Figure(traces)
     labels = {f'{a}axis_title': f'Dim {d + 1}' for a, d in zip('xyz', dims)}
-    fig.update_layout(scene=dict(aspectmode='data', **labels), showlegend=False)
+    fig.update_layout(scene=dict(aspectmode='data', **labels), showlegend=False, template='plotly_white',
+                      margin=dict(l=0, r=0, b=0, t=40))
     return fig
 
 
@@ -1056,19 +1250,36 @@ def save_rotation(gres, path, key=None, cells=False, frames=72, elevation=20, fp
         writer = animation.FFMpegWriter(fps=fps)
     else:
         raise ValueError(f'path must end in .gif or .mp4, got {path!r}')
-    ax = plot_grids(gres, key=key, cells=cells, view=(elevation, 0), **kwargs)
+    ax = _rotation_axes(gres, key, cells, elevation, **kwargs)
+    try:
+        def turn(i):
+            ax.view_init(elevation, 360 * i / frames)
+            return []
 
-    def turn(i):
-        ax.view_init(elevation, 360 * i / frames)
-        return []
-
-    anim = animation.FuncAnimation(ax.figure, turn, frames=frames, blit=False)
-    anim.save(str(path), writer=writer, dpi=dpi)
-    plt.close(ax.figure)
+        anim = animation.FuncAnimation(ax.figure, turn, frames=frames, blit=False)
+        anim.save(str(path), writer=writer, dpi=dpi)
+    finally:
+        plt.close(ax.figure)
     return path
 
 
-def plot_report(gres, key, clusters=None, title=None, cmap='plasma', vmin=None, vmax=None, vcenter=None):
+def _rotation_axes(gres, key, cells, elevation, **kwargs):
+    """The view turned by ``save_rotation``: fixed limits and box, no axis text besides the colour bar's."""
+    for name in ('view', 'ax'):
+        if name in kwargs:
+            raise TypeError(f'save_rotation sets {name!r} itself; it cannot be passed on to plot_grids.')
+    ax = plot_grids(gres, key=key, cells=cells, view=(elevation, 0), **kwargs)
+    ax.set_xlim(ax.get_xlim())
+    ax.set_ylim(ax.get_ylim())
+    ax.set_zlim(ax.get_zlim())
+    for axis in (ax.xaxis, ax.yaxis, ax.zaxis):
+        axis.set_label_text('')
+        axis.set_ticklabels([])
+    return ax
+
+
+def plot_report(gres, key, clusters=None, title=None, cmap='plasma', vmin=None, vmax=None, vcenter=None, robust=True,
+                label=None):
     """
     One page of results for a value on a 3-D grid.
 
@@ -1097,6 +1308,12 @@ def plot_report(gres, key, clusters=None, title=None, cmap='plasma', vmin=None, 
     vcenter
         Value at the centre of the colour scale: the limits are made symmetric about it.
         (Default: None)
+    robust
+        Colour limits that leave out a few outlying values (see ``plot_grids``).
+        (Default: True)
+    label
+        Colour bar label.
+        (Default: None, the key)
 
     Returns
     ----------
@@ -1104,29 +1321,55 @@ def plot_report(gres, key, clusters=None, title=None, cmap='plasma', vmin=None, 
     """
     _require_3d(gres, 'plot_report')
     dims = [0, 1, 2]
-    vmin, vmax = _value_limits(_layers(gres, key, False, dims, False), vmin, vmax, vcenter)
-    fig = plt.figure(figsize=(12, 13))
-    if title is not None:
-        fig.suptitle(title, y=.985)
-
-    ax3 = fig.add_axes([0, .66, .29, .31], projection='3d')
-    plot_grids(gres, key=key, ax=ax3, cmap=cmap, colorbar=False, vmin=vmin, vmax=vmax)
-    mappable = None
-    for i, d in enumerate(dims):
-        ax = fig.add_axes([.31 + i * .21, .72, .17, .21])
-        mappable = _draw_projection(ax, _projection(gres, key, d, dims, 'max'), d, 'max', key, cmap, vmin, vmax,
-                                    title_size='small') or mappable
-
-    cut, shown, slab_of, bounds = _sections(gres, 2, 6, dims)
+    if key == 'clusters' or key not in gres.grids or _is_categorical(gres.grids[key]):
+        raise ValueError('plot_report needs a numeric key stored on the grid.')
     layers = _layers(gres, key, False, dims, False)
+    vmin, vmax = _value_limits(layers, vmin, vmax, vcenter, robust)
+    data = [_projection(gres, key, d, dims, 'max') for d in dims]
+    cut, shown, slab_of, bounds = _sections(gres, 2, 6, dims)
     limits = _limits(np.vstack([c[:, shown] for c, _, _, _ in layers]))
-    for k in range(6):
-        ax = fig.add_axes([.04 + k * .152, .42, .125, .2])
-        _draw_section(ax, k, layers, cut, shown, slab_of, bounds, limits, cmap, vmin, vmax, 6, title_size='small')
-    fig.colorbar(mappable, cax=fig.add_axes([.925, .46, .012, .45], label='<colorbar>'), label=key)
 
-    plot_clusters(gres, key, cells=False, ax=fig.add_axes([.07, .07, .4, .27]))
-    plot_trend(gres, key, cells=False, clusters=clusters, ax=fig.add_axes([.57, .07, .38, .27]))
+    W, left, right_strip, gap = 12.0, .45, 1.2, .45
+    proj_w = [p[1][-1] - p[1][0] for p in data]
+    proj_h = [p[2][-1] - p[2][0] for p in data]
+    width3d = 3.2
+    avail = W - left - right_strip - width3d - 3 * gap
+    scale = min(avail / sum(proj_w), 2.8 / max(proj_h))
+    pw, ph = [w * scale for w in proj_w], [h * scale for h in proj_h]
+    row1 = max(max(ph), 2.4)
+    sw = (W - left - right_strip - 5 * .35) / 6
+    sh = float(np.clip(sw * (limits[1][1] - limits[1][0]) / (limits[0][1] - limits[0][0]), .5, 2.5))
+    row3 = 3.0
+    longest = max(len(str(c)) for c in _cluster_order(gres)) if 'clusters' in gres.embedding else 3
+    top = .55 + (.35 if title is not None else 0)
+    bottom = .35 + .055 * longest
+    H = top + row1 + .6 + sh + .6 + row3 + bottom
+    fig = plt.figure(figsize=(W, H))
+    if title is not None:
+        fig.suptitle(title, y=1 - .3 / H)
+
+    def rect(x, y_top, w, h):
+        return [x / W, (H - y_top - h) / H, w / W, h / H]
+
+    ax3 = fig.add_axes(rect(0, top - .2, width3d + .2, row1 + .3), projection='3d')
+    plot_grids(gres, key=key, ax=ax3, cmap=cmap, colorbar=False, vmin=vmin, vmax=vmax)
+    mappable, x = None, width3d + gap + left * .5
+    for d, p, w, h in zip(dims, data, pw, ph):
+        ax = fig.add_axes(rect(x, top + row1 - h, w, h))
+        mappable = _draw_projection(ax, p, d, 'max', key, cmap, vmin, vmax, title_size='small') or mappable
+        x += w + gap
+
+    y2 = top + row1 + .6
+    for k in range(6):
+        ax = fig.add_axes(rect(left + k * (sw + .35), y2, sw, sh))
+        _draw_section(ax, k, layers, cut, shown, slab_of, bounds, limits, cmap, vmin, vmax, 6, title_size='small')
+    fig.colorbar(mappable, cax=fig.add_axes(rect(W - right_strip + .3, top + .2, .14, row1 + .6 + sh - .4),
+                                            label='<colorbar>'),
+                 label=key if label is None else label, extend=_extend(layers, vmin, vmax))
+
+    y3 = y2 + sh + .6
+    plot_clusters(gres, key, cells=False, ax=fig.add_axes(rect(.75, y3, 4.6, row3)))
+    plot_trend(gres, key, cells=False, clusters=clusters, ax=fig.add_axes(rect(6.6, y3, 4.6, row3)))
     return fig
 
 
@@ -1271,18 +1514,18 @@ def plot_fates(gres, key_add='gate', cells=False, dims=(0, 1, 2), view=(22, -58)
         raise KeyError(f'No lineage weights under {key_add!r}: call fate_gate or fate_probabilities first.')
     three = np.asarray(gres.embedding['embedding']).shape[1] > 2
     W, names, clusters = _weights(gres, key_add, cells)
-    fig = plt.figure(figsize=(15, 4.8))
-    ax1 = _map_axes(fig, [0, .04, .25, .84] if three else [.04, .1, .2, .76], three)
+    fig = plt.figure(figsize=(14, 4.6))
+    ax1 = _map_axes(fig, [0, 0, .27, .93] if three else [.04, .1, .2, .76], three)
     _draw_map(ax1, gres, f'{key_add}_top', cells, dims, view, three)
     ax1.set_title('Heaviest lineage')
     handles = _legend_handles(gres, _layers(gres, f'{key_add}_top', cells, list(dims) if three else [0, 1],
                                             False))
     ax1.legend(handles=handles, loc='center left', bbox_to_anchor=(1, .5), frameon=False, fontsize='small')
-    ax2 = _map_axes(fig, [.36, .04, .25, .84] if three else [.39, .1, .2, .76], three)
+    ax2 = _map_axes(fig, [.34, 0, .27, .93] if three else [.39, .1, .2, .76], three)
     mappable = _draw_map(ax2, gres, f'{key_add}_entropy', cells, dims, view, three, cmap='viridis', vmin=0, vmax=1)
     ax2.set_title('How undecided')
-    fig.colorbar(mappable, cax=fig.add_axes([.615, .22, .01, .5], label='<colorbar>'), label='Undecided (0-1)')
-    ax3 = fig.add_axes([.76, .14, .22, .72])
+    fig.colorbar(mappable, cax=fig.add_axes([.615, .225, .01, .55], label='<colorbar>'), label='Undecided (0-1)')
+    ax3 = fig.add_axes([.785, .13, .195, .75])
     if clusters is None:
         groups, order = np.array(['all'] * len(W)), ['all']
     else:
@@ -1300,6 +1543,7 @@ def plot_fates(gres, key_add='gate', cells=False, dims=(0, 1, 2), view=(22, -58)
     ax3.set_yticks(y, [str(c) for c in order])
     ax3.set_xlim(0, 1)
     ax3.set_xlabel('Mean lineage weight')
+    ax3.set_ylabel('Cluster')
     ax3.set_title('Per cluster')
     ax3.spines[['top', 'right']].set_visible(False)
     return fig
@@ -1311,7 +1555,8 @@ def plot_conditions(gres, dims=(0, 1, 2), view=(22, -58)):
 
     Panel 1: where each condition is (shared, one condition only, too few cells). Panel 2: the log2 fold change
     of the test against the reference condition where it was tested; points without a significant
-    difference are drawn faint and small, untested points grey. Panel 3: per cluster, the number of grid
+    difference are drawn faint and small, untested points grey; the colour scale is symmetric about 0 and ends
+    at the 99th percentile of the absolute fold changes (arrows on the colour bar mark larger ones). Panel 3: per cluster, the number of grid
     points called depleted, enriched or not different. Panel 4: per cluster, the grid points held by one
     condition only, observed (solid) against the number expected after shuffling the condition labels
     (hatched).
@@ -1336,21 +1581,22 @@ def plot_conditions(gres, dims=(0, 1, 2), view=(22, -58)):
     three = np.asarray(gres.embedding['embedding']).shape[1] > 2
     dims = list(dims) if three else [0, 1]
     test, reference = gres.grids['abundance_test'], gres.grids['abundance_reference']
-    fig = plt.figure(figsize=(13, 10.5))
+    fig = plt.figure(figsize=(13, 9.6))
 
-    ax1 = _map_axes(fig, [0, .53, .36, .42] if three else [.05, .56, .3, .38], three)
+    ax1 = _map_axes(fig, [0, .47, .37, .5] if three else [.05, .52, .3, .42], three)
     _draw_map(ax1, gres, 'abundance_class', False, dims, view, three)
     ax1.set_title('Where each condition is')
     ax1.legend(handles=_legend_handles(gres, _layers(gres, 'abundance_class', False, dims, False)),
                loc='center left', bbox_to_anchor=(1, .5), frameon=False, fontsize='small')
 
-    ax2 = _map_axes(fig, [.5, .53, .36, .42] if three else [.53, .56, .3, .38], three)
+    ax2 = _map_axes(fig, [.5, .47, .37, .5] if three else [.53, .52, .3, .42], three)
     travel = np.asarray(gres.grids['mapped_travel'])
     coords = np.asarray(gres.grids['grids'])[travel][:, dims]
     log2fc = _grid_values(gres, 'abundance_log2fc', travel)
     call = _raw_grid_values(gres, 'abundance_call', travel).astype(str)
     finite = log2fc[~np.isnan(log2fc)]
-    half = np.abs(finite).max() if len(finite) else 1.0
+    half = np.percentile(np.abs(finite), 99) if len(finite) else 1.0
+    half = half if half > 0 else 1.0
     s = 8 if three else 12
     ax2.scatter(*coords[call == 'too few cells'].T, s=s / 2, lw=0, color=GREY)
     quiet = call == 'no difference'
@@ -1366,8 +1612,10 @@ def plot_conditions(gres, dims=(0, 1, 2), view=(22, -58)):
         ax2.set_xlabel(f'Dim {dims[0] + 1}')
         ax2.set_ylabel(f'Dim {dims[1] + 1}')
     ax2.set_title('Change in cell numbers')
-    fig.colorbar(mappable, cax=fig.add_axes([.88, .58, .012, .32], label='<colorbar>'),
-                 label=f'log2 fold change ({test} / {reference})')
+    beyond = np.abs(finite) > half
+    extend = _extend([(None, None, finite, None)], -half, half) if beyond.any() else 'neither'
+    fig.colorbar(mappable, cax=fig.add_axes([.89, .585, .012, .275], label='<colorbar>'),
+                 label=f'log2 fold change ({test} / {reference})', extend=extend)
 
     clusters, order = (np.asarray(gres.grids['mapped_grids_clusters']), list(gres.grids['abundance_clusters'].index)) \
         if 'mapped_grids_clusters' in gres.grids else (np.array(['all'] * len(gres.grids['mapped_grids'])), ['all'])
@@ -1375,14 +1623,15 @@ def plot_conditions(gres, dims=(0, 1, 2), view=(22, -58)):
     call_colors = gres.grids['abundance_call_colors']
     y = np.arange(len(order))[::-1]
     width = max(len(str(c)) for c in order)
-    left_margin = (.25 + .075 * width) / 13
-    ax3 = fig.add_axes([left_margin, .07, .44 - left_margin, .36])
+    left_margin = (.45 + .075 * width) / 13
+    ax3 = fig.add_axes([left_margin + .02, .07, .42 - left_margin, .33])
     left = np.zeros(len(order))
     for name in ('depleted', 'enriched', 'no difference'):
         n = np.array([((clusters == c) & (calls == name)).sum() for c in order])
         ax3.barh(y, n, left=left, color=call_colors[name], label=name, height=.8)
         left += n
     ax3.set_yticks(y, [str(c) for c in order])
+    ax3.set_ylabel('Cluster')
     ax3.set_xlabel('Grid points')
     ax3.set_title('Called per cluster')
     ax3.legend(frameon=False, fontsize='small', loc='lower right')
@@ -1390,7 +1639,7 @@ def plot_conditions(gres, dims=(0, 1, 2), view=(22, -58)):
 
     summary = gres.grids['abundance_clusters']
     class_colors = gres.grids['abundance_class_colors']
-    ax4 = fig.add_axes([.5 + left_margin, .07, .48 - left_margin, .36])
+    ax4 = fig.add_axes([.52 + left_margin, .07, .46 - left_margin, .33])
     h = .2
     for j, name in enumerate((reference, test)):
         label = f'{name} only'
@@ -1401,6 +1650,7 @@ def plot_conditions(gres, dims=(0, 1, 2), view=(22, -58)):
         ax4.barh(base - h, chance, height=h, color='white', edgecolor=class_colors[label], hatch='////',
                  label=f'{label}, by chance')
     ax4.set_yticks(y, [str(c) for c in order])
+    ax4.set_ylabel('Cluster')
     ax4.set_xlabel('Grid points held by one condition')
     ax4.set_title('Observed against label shuffling')
     ax4.legend(frameon=False, fontsize='small', loc='lower right')

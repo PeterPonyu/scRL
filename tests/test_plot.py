@@ -164,13 +164,28 @@ def test_plot_policy(d, scan2d):
     t.agent.Q.loc[:, :] = 0.0
     t.agent.Q.loc[:, move] = 1.0
     arrows = _arrows(scRL.plot_policy(gres, t, every=2), d == 3)
-    assert len(arrows) == len(_thinned(gres, range(d), 2))
+    assert len(arrows) == (_blocks(gres, range(3), 2) if d == 3 else len(_thinned(gres, range(d), 2)))
     np.testing.assert_allclose(arrows, np.tile(expected * (2 if d == 3 else 1), (len(arrows), 1)), atol=1e-6)
 
 
 def _lattice(gres, flat):
     shape = gres.grids.get('shape', (gres.grids['n'],) * 2)
     return np.array(np.unravel_index(np.asarray(flat), shape)).T
+
+
+def _blocks(gres, dims, k, groups=None):
+    """Number of blocks of k grid steps along dims (per group) holding at least min(3, k**len(dims)) travel points."""
+    travel = np.asarray(gres.grids['mapped_travel'])
+    cells = _lattice(gres, travel)[:, list(dims)] // k
+    keys = cells if groups is None else np.column_stack([groups, cells])
+    _, counts = np.unique(keys, axis=0, return_counts=True)
+    return int((counts >= min(3, k ** len(dims))).sum())
+
+
+def _slabs(gres, n_slices=4):
+    from scRL.PlotCore import _sections
+    _, _, slab_of, _ = _sections(gres, 2, n_slices, [0, 1, 2])
+    return slab_of(gres.grids['grids'][np.asarray(gres.grids['mapped_travel'])])
 
 
 def _thinned(gres, dims, k):
@@ -254,7 +269,7 @@ def test_plot_policy_3d_default_sub_lattice():
     k = max(1, int(np.ceil((np.ptp(kept, axis=0).max() + 1) / 15)))
     ax = scRL.plot_policy(gres, t)
     arrows = _arrows(ax, True)
-    assert len(arrows) == len(_thinned(gres, range(3), k))
+    assert len(arrows) == _blocks(gres, range(3), k)
     np.testing.assert_allclose(arrows, np.tile(.8 * k * _offsets(gres)[0] * _spacing(gres), (len(arrows), 1)),
                                atol=1e-6)
     assert ax.collections[-1].get_linewidth()[0] > 0
@@ -278,22 +293,18 @@ def test_plot_slices_policy_in_plane():
         q = [c for c in ax.collections if isinstance(c, Quiver)]
         assert len(q) == 1
         np.testing.assert_allclose(np.column_stack([q[0].U, q[0].V]), np.tile([.8 * 2 * h[0], 0], (len(q[0].U), 1)))
-        assert not [l for l in ax.lines if l.get_marker() in ('^', 'v')]
+        np.testing.assert_allclose(q[0].get_array(), 0)
+        assert not ax.lines
         total += len(q[0].U)
-    assert total == len(_thinned(gres, (0, 1), 2))
+    assert total == _blocks(gres, (0, 1), 2, _slabs(gres))
     _assert_layout(fig)
 
 
 def test_plot_slices_policy_across():
     from matplotlib.quiver import Quiver
     gres, fig = _slices_with_policy('z+')
-    total = 0
     for ax in _panels(fig):
-        assert not [c for c in ax.collections if isinstance(c, Quiver)]
-        markers = [l for l in ax.lines if l.get_marker() in ('^', 'v')]
-        assert {l.get_marker() for l in markers} == {'^'}
-        total += sum(len(l.get_xdata()) for l in markers)
-    assert total == len(_thinned(gres, (0, 1), 2))
+        assert not [c for c in ax.collections if isinstance(c, Quiver)] and not ax.lines
 
 
 def test_plot_slices_policy_default_thinning():
@@ -305,8 +316,28 @@ def test_plot_slices_policy_default_thinning():
     fig = scRL.plot_slices(gres, key='pseudotime', policy=t)
     for ax in _panels(fig):
         for q in [c for c in ax.collections if isinstance(c, Quiver)]:
-            assert len(np.unique(np.round(q.X, 6))) <= 16 and len(np.unique(np.round(q.Y, 6))) <= 16
+            tails = np.round(np.column_stack([q.X, q.Y]), 9)
+            assert len(np.unique(tails, axis=0)) == len(tails)          # no two arrows share a tail
     _assert_layout(fig)
+
+
+def test_plot_slices_policy_cancelling_moves():
+    from matplotlib.quiver import Quiver
+    gres = _gres(3)
+    c = _lattice(gres, gres.grids['mapped_grids'])
+    moves = np.where(c[:, 0] % 2 == 0, gres.grids['actions'].index('x+'), gres.grids['actions'].index('x-'))
+    fig = scRL.plot_slices(gres, key='pseudotime', n_slices=4, policy=moves, policy_every=2)
+    travel = np.asarray(gres.grids['mapped_travel'])
+    lt = _lattice(gres, travel)
+    keys = np.column_stack([_slabs(gres), lt[:, :2] // 2])
+    _, block = np.unique(keys, axis=0, return_inverse=True)
+    pos = {g: p for p, g in enumerate(gres.grids['mapped_grids'])}
+    even = (lt[:, 0] % 2 == 0)
+    balanced = {b for b in np.unique(block) if even[block == b].sum() * 2 == (block == b).sum()}
+    tails = {tuple(np.round(gres.grids['grids'][travel[block == b]][:, :2].mean(0), 6)) for b in balanced}
+    drawn = {tuple(np.round(xy, 6)) for ax in _panels(fig) for q in ax.collections if isinstance(q, Quiver)
+             for xy in np.column_stack([q.X, q.Y])}
+    assert balanced and not tails & drawn
 
 
 def test_plot_trend_restricted_to_clusters():
@@ -319,6 +350,11 @@ def test_plot_trend_restricted_to_clusters():
     np.testing.assert_allclose(ax.lines[0].get_ydata(), _bin_medians(pt[inside], pt[inside], 8))
     with pytest.raises(ValueError, match='branchA'):
         scRL.plot_trend(gres, 'lineage', clusters=['nowhere'])
+
+
+def _legend(ax):
+    """The legend of a single view: on the axes, or the figure's own when the view fills the figure."""
+    return ax.get_legend() or ax.figure.legends[0]
 
 
 def _drawn_rgb(ax):
@@ -337,7 +373,7 @@ def test_cluster_colouring():
     pos = {g: p for p, g in enumerate(gres.grids['mapped_grids'])}
     stored = to_rgba_array(np.asarray(gres.grids['mapped_grids_colors'])[[pos[g] for g in travel]])[:, :3]
     np.testing.assert_allclose(_drawn_rgb(ax), stored[np.lexsort(stored.T)])
-    assert [t.get_text() for t in ax.get_legend().get_texts()] == names
+    assert [t.get_text() for t in _legend(ax).get_texts()] == names
     ax = scRL.plot_grids(gres, key='clusters', cells=True)
     stored = to_rgba_array(gres.embedding['cluster_colors'])[:, :3]
     np.testing.assert_allclose(_drawn_rgb(ax), stored[np.lexsort(stored.T)])
@@ -441,9 +477,10 @@ def test_interactive_policy():
     fig = scRL.plot_policy(gres, t, key='pseudotime', interactive=True, every=2)
     assert [tr.type for tr in fig.data] == ['scatter3d', 'cone']
     cone = fig.data[1]
-    move = _offsets(gres)[2] / np.linalg.norm(_offsets(gres)[2])
-    np.testing.assert_allclose(np.column_stack([cone.u, cone.v, cone.w]), np.tile(move, (len(cone.u), 1)))
-    assert len(cone.u) == len(_thinned(gres, range(3), 2))
+    expected = .8 * 2 * _offsets(gres)[2] * _spacing(gres)
+    np.testing.assert_allclose(np.column_stack([cone.u, cone.v, cone.w]), np.tile(expected, (len(cone.u), 1)))
+    assert len(cone.u) == _blocks(gres, range(3), 2)
+    assert fig.layout.template.layout.paper_bgcolor == 'white'
 
 
 def test_interactive_policy_needs_3d(scan2d):
@@ -476,9 +513,9 @@ def test_categorical_key_with_stored_colours():
     _string_key(gres)
     gres.grids['part_colors'] = {'late': '#ff0000', 'early': '#00ff00', 'middle': '#0000ff'}
     ax = scRL.plot_grids(gres, key='part')
-    texts = [t.get_text() for t in ax.get_legend().get_texts()]
+    texts = [t.get_text() for t in _legend(ax).get_texts()]
     assert texts == ['late', 'early', 'middle']
-    for h in ax.get_legend().legend_handles:
+    for h in _legend(ax).legend_handles:
         assert to_rgba(h.get_color()) == to_rgba(gres.grids['part_colors'][h.get_label()])
     travel = gres.grids['mapped_travel']
     pos = {g: p for p, g in enumerate(gres.grids['mapped_grids'])}
@@ -492,7 +529,7 @@ def test_categorical_key_default_colours_and_cells():
     gres = _gres(3)
     gres.embedding['which'] = np.where(np.asarray(gres.embedding['clusters']) == 'root', 'start', 'rest')
     ax = scRL.plot_grids(gres, key='which', cells=True)
-    handles = ax.get_legend().legend_handles
+    handles = _legend(ax).legend_handles
     assert [h.get_label() for h in handles] == ['rest', 'start']
     assert [to_rgba(h.get_color()) for h in handles] == [to_rgba(c) for c in plt.get_cmap('tab10').colors[:2]]
 
@@ -502,10 +539,10 @@ def test_vcenter_and_explicit_limits():
     gres.grids['shifted'] = np.asarray(gres.grids['pseudotime']) - .2
     pos = {g: p for p, g in enumerate(gres.grids['mapped_grids'])}
     drawn = gres.grids['shifted'][[pos[g] for g in gres.grids['mapped_travel']]]
-    ax = scRL.plot_grids(gres, key='shifted', vcenter=0)
+    ax = scRL.plot_grids(gres, key='shifted', vcenter=0, robust=False)
     lo, hi = ax.collections[-1].get_clim()
     assert lo == -hi and hi == pytest.approx(np.abs(drawn).max())
-    ax = scRL.plot_grids(gres, key='shifted', vcenter=0, vmin=-.1)
+    ax = scRL.plot_grids(gres, key='shifted', vcenter=0, vmin=-.1, robust=False)
     assert ax.collections[-1].get_clim() == (-.1, pytest.approx(np.abs(drawn).max()))
     fig = scRL.plot_slices(gres, key='shifted', vcenter=0)
     lo, hi = [c for ax in fig.axes for c in ax.collections if c.get_array() is not None][0].get_clim()
@@ -519,7 +556,7 @@ def test_missing_values_are_grey_and_do_not_set_limits():
     values[::3] = np.nan
     values[1] = 100.0 if np.isnan(values[1]) else values[1]
     gres.grids['holes'] = values
-    ax = scRL.plot_grids(gres, key='holes')
+    ax = scRL.plot_grids(gres, key='holes', robust=False)
     grey, coloured = ax.collections[0], ax.collections[1]
     travel = gres.grids['mapped_travel']
     pos = {g: p for p, g in enumerate(gres.grids['mapped_grids'])}
@@ -543,3 +580,143 @@ def test_categorical_projection_and_layouts():
     for fig in (fig, scRL.plot_views(gres, key='part'), scRL.plot_slices(gres, key='part')):
         _assert_layout(fig)
         assert not [ax for ax in fig.axes if ax.get_label() == '<colorbar>']
+
+
+def test_robust_limits_and_extend_arrows():
+    gres = _gres(3)
+    values = np.asarray(gres.grids['pseudotime'], dtype=float).copy()
+    pos = {g: p for p, g in enumerate(gres.grids['mapped_grids'])}
+    first = pos[gres.grids['mapped_travel'][0]]
+    values[first] = 50.0
+    gres.grids['outlier'] = values
+    ax = scRL.plot_grids(gres, key='outlier')
+    lo, hi = ax.collections[-1].get_clim()
+    drawn = values[[pos[g] for g in gres.grids['mapped_travel']]]
+    assert hi == pytest.approx(np.percentile(drawn, 99)) and hi < 50 and lo == drawn.min()
+    colorbar = [a for a in ax.figure.axes if a.get_label() == '<colorbar>'][0]
+    assert colorbar.get_ylabel() == 'outlier'
+    assert ax.collections[-1].colorbar.extend == 'max'
+    ax = scRL.plot_grids(gres, key='outlier', robust=False, label='Value')
+    assert ax.collections[-1].get_clim()[1] == 50 and ax.collections[-1].colorbar.extend == 'neither'
+    assert [a for a in ax.figure.axes if a.get_label() == '<colorbar>'][0].get_ylabel() == 'Value'
+
+
+def test_categorical_missing_values_and_own_order():
+    from matplotlib.colors import to_rgba
+    gres = _gres(3)
+    M = len(gres.grids['mapped_grids'])
+    values = np.array(['x', 'y'] * (M // 2) + ['x'] * (M % 2), dtype=object)
+    values[::5] = np.nan
+    gres.grids['tag'] = values
+    ax = scRL.plot_grids(gres, key='tag')
+    assert [t.get_text() for t in _legend(ax).get_texts()] == ['x', 'y']
+    assert to_rgba(ax.collections[0].get_facecolor()[0]) == to_rgba('#d9d9d9')
+    fig = scRL.plot_projections(gres, key='tag')
+    image = fig.axes[0].images[0].get_array()
+    assert image.shape[-1] == 4
+    gres.grids['ordered'] = pd.Series(pd.Categorical(np.where(np.arange(M) % 2, 'b', 'a'), categories=['b', 'a']),
+                                      index=gres.grids['mapped_grids'])
+    ax = scRL.plot_grids(gres, key='ordered')
+    assert [t.get_text() for t in _legend(ax).get_texts()] == ['b', 'a']
+
+
+def test_projection_pixel_blank_when_all_missing():
+    gres = _gres(3)
+    M = len(gres.grids['mapped_grids'])
+    values = np.array(['x'] * M, dtype=object)
+    c = _lattice(gres, gres.grids['mapped_grids'])
+    target = tuple(c[np.flatnonzero(np.isin(gres.grids['mapped_grids'], gres.grids['mapped_travel']))[0], :2])
+    column = (c[:, 0] == target[0]) & (c[:, 1] == target[1])
+    values[column] = None
+    gres.grids['tag'] = values
+    data = scRL.PlotCore._projection(gres, 'tag', 2, [0, 1, 2], 'max')
+    travel = _lattice(gres, gres.grids['mapped_travel'])
+    lo = travel[:, :2].min(0)
+    assert data[0][target[1] - lo[1], target[0] - lo[0], 3] == 0
+
+
+def test_report_rejects_categorical_keys():
+    gres = _gres(3)
+    _string_key(gres)
+    with pytest.raises(ValueError, match='numeric'):
+        scRL.plot_report(gres, 'part')
+
+
+def test_projection_titles_in_4d():
+    X, labels, _, _ = make_tree(d=4)
+    gres = scRL.grids_from_embedding(X)
+    scRL.project_cluster(gres, pd.Series(pd.Categorical(labels)))
+    seed_all(0); scRL.align_pseudotime(gres, 'root', boundary=False)
+    fig = scRL.plot_projections(gres, key='pseudotime')
+    assert all('the other axes' in ax.get_title() for ax in fig.axes if ax.get_label() != '<colorbar>')
+
+
+def test_rotation_frame(tmp_path):
+    from scRL.PlotCore import _rotation_axes
+    gres = _gres(3)
+    ax = _rotation_axes(gres, 'pseudotime', False, 20)
+    ax.figure.canvas.draw()
+    texts = [t for a in (ax.xaxis, ax.yaxis, ax.zaxis) for t in [a.label] + a.get_ticklabels() if t.get_text()]
+    assert not texts
+    bar = [a for a in ax.figure.axes if a.get_label() == '<colorbar>'][0]
+    assert bar.get_ylabel() == 'pseudotime'
+    with pytest.raises(TypeError, match='view'):
+        scRL.save_rotation(gres, tmp_path / 'r.gif', key='pseudotime', view=(10, 10))
+
+
+def test_clusters_figure_fits_rotated_names():
+    gres = _gres(3)
+    names = np.array(['a', 'bb', 'twelve chars', 'd'])
+    labels = pd.Series(pd.Categorical(names[np.arange(600) % 4]))
+    scRL.project_cluster(gres, labels)
+    ax = scRL.plot_clusters(gres, 'pseudotime')
+    fig = ax.figure
+    fig.canvas.draw()
+    W, H = fig.canvas.get_width_height()
+    for t in ax.get_xticklabels():
+        b = t.get_window_extent()
+        assert b.x0 >= 0 and b.y0 >= 0 and b.x1 <= W
+    _assert_layout(fig)
+
+
+def test_trend_axis_labels():
+    gres = _gres(3)
+    ax = scRL.plot_trend(gres, 'pseudotime')
+    assert ax.get_xlabel() == 'Pseudotime' and ax.get_ylabel() == 'Value'
+    ax = scRL.plot_trend(gres, 'pseudotime', xlabel='t', ylabel='v')
+    assert (ax.get_xlabel(), ax.get_ylabel()) == ('t', 'v')
+
+
+def test_interactive_layout_and_hover():
+    pytest.importorskip('plotly')
+    gres = _gres(3)
+    values = np.asarray(gres.grids['pseudotime'], dtype=float).copy()
+    values[::4] = np.nan
+    gres.grids['holes'] = values
+    fig = scRL.plot_grids(gres, key=['holes', 'clusters'], interactive=True)
+    assert fig.layout.template.layout.paper_bgcolor == 'white'
+    assert fig.layout.title.text is None
+    n_travel = len(gres.grids['mapped_travel'])
+    first = [tr for tr in fig.data if tr.visible]
+    assert sum(len(tr.x) for tr in first) == n_travel
+    assert 'cluster: ' in fig.data[-1].text[0]
+    single = scRL.plot_grids(gres, key='holes', interactive=True)
+    assert single.data[-1].marker.colorbar.title.text == 'holes'
+
+
+def test_slices_legend_margin():
+    gres = _gres(3)
+    G = gres.grids['grids'][gres.grids['mapped_grids']]
+    gres.grids['five'] = np.array(list('abcde'), dtype=object)[np.digitize(G[:, 0], np.quantile(G[:, 0], [.2, .4, .6, .8]))]
+    for key in ('five',):
+        fig = scRL.plot_slices(gres, key=key)
+        fig.canvas.draw()
+        W = fig.canvas.get_width_height()[0]
+        right = max(t.get_window_extent().x1 for t in fig.legends[0].get_texts())
+        assert W - right >= .1 * fig.dpi
+        _assert_layout(fig)
+    _string_key(gres, long=True)
+    fig = scRL.plot_slices(gres, key='part')
+    fig.canvas.draw()
+    right = max(t.get_window_extent().x1 for t in fig.legends[0].get_texts())
+    assert fig.canvas.get_width_height()[0] - right >= .1 * fig.dpi
