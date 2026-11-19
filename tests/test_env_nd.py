@@ -137,3 +137,10 @@ def test_2d_envs_explain_missing_start_probabilities(scan2d):
         deepEnv(scan2d, Z2, KNN=10, reward_type='d', reward_mode='Decision', starts_probs=True)
     with pytest.raises(ValueError, match='starts_keys'):
         tabularEnv(scan2d, reward_type='d', reward_mode='Decision', starts_probs=True)
+
+
+def test_reachability_on_a_2d_scan_grid(scan2d):
+    scRL.d_rewards(scan2d, starts=['root'], ends=['branchA'])
+    info = reachability(scan2d, 'd', 'Decision', max_step=50)
+    assert info == reachability(lattice_from_scan(scan2d), 'd', 'Decision', max_step=50)
+    assert info['rewarded'] > 0 and 'neighbors' not in scan2d.grids

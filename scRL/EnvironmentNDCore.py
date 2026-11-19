@@ -168,7 +168,8 @@ def _stop_mask(gres, starts_grids):
 
 def reachability(gres, reward_type='d', reward_mode='Decision', max_step=50):
     """
-    Check which rewarded grid points an episode can reach under the stop rules and the step cap.
+    Check which rewarded grid points an episode can reach under the stop rules and the step cap (any grid,
+    2-D scan grids included).
 
     Episodes start at the start cluster grid points (or, without them, at the grid points with a positive
     start probability), stop when they leave the grid, enter a boundary point outside the start points or
@@ -200,7 +201,9 @@ def reachability(gres, reward_type='d', reward_mode='Decision', max_step=50):
     else:
         starts = np.flatnonzero(np.asarray(gres.grids['starts_probs']) > 0)
     R = gres.qlearning[f'{reward_type}_{reward_mode}_rewards'].to_numpy(dtype=float)
-    return _reach(gres.grids['neighbors'], R, starts, _stop_mask(gres, starts_grids), max_step)
+    from .GridNDCore import is_nd, lattice_from_scan
+    lattice = gres if is_nd(gres) else lattice_from_scan(gres)       # 2-D scan grids: the same lattice, with moves
+    return _reach(lattice.grids['neighbors'], R, starts, _stop_mask(lattice, starts_grids), max_step)
 
 
 class _gridEnvND:
