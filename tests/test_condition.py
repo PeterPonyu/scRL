@@ -233,3 +233,62 @@ def test_cluster_pvalue_counts_only_shuffles_that_entered():
     null[4:, 4:] = np.nan
     table = _cluster_table(d, null, clusters, ['a', 'b'], spread=2.0)
     assert table.loc['b', 'shuffles'] == 4 and np.isnan(table.loc['b', ['effect', 'z', 'pvalue']]).all()
+
+
+def _samples_setup(remove_lineage, seed=0):
+    """Three samples per condition from one population; optionally branchB removed from every test sample."""
+    X, labels, Z, genes = make_tree(n_cells=1500, d=3, seed=1)
+    gres = scRL.grids_from_embedding(X)
+    scRL.project_cluster(gres, pd.Series(pd.Categorical(labels)))
+    rng = np.random.default_rng(seed)
+    conditions = np.where(rng.random(len(labels)) < .5, 'A', 'B')
+    if remove_lineage:
+        conditions[labels == 'branchB'] = 'B'
+    samples = np.array([f'{c}{i}' for c, i in zip(conditions, rng.integers(3, size=len(labels)))])
+    scRL.project_conditions(gres, conditions)
+    gres.embedding['lineage'] = np.where(np.isin(labels, ['branchA', 'branchB']), labels, 'stem')
+    return gres, labels, conditions, samples
+
+
+def test_shares_by_sample():
+    gres, labels, conditions, samples = _samples_setup(False)
+    table = scRL.shares_by_sample(gres, samples, key='lineage')
+    assert list(table.columns)[0] == 'condition'
+    np.testing.assert_allclose(table.drop(columns='condition').sum(1), 1)
+    lineage = gres.embedding['lineage']
+    for s in ('A0', 'B2'):
+        cells = samples == s
+        assert table.loc[s, 'branchA'] == pytest.approx((lineage[cells] == 'branchA').mean())
+        assert table.loc[s, 'condition'] == s[0]
+    mixed = samples.copy()
+    mixed[np.flatnonzero(conditions == 'B')[0]] = 'A0'
+    with pytest.raises(ValueError, match='A0'):
+        scRL.shares_by_sample(gres, mixed, key='lineage')
+
+
+def test_compare_fates_across_samples():
+    gres, labels, conditions, samples = _samples_setup(False)
+    plain = scRL.compare_fates(gres, 'A', 'B', key='lineage', n_permutations=200, n_boot=50)
+    table = scRL.compare_fates(gres, 'A', 'B', key='lineage', samples=samples, n_permutations=200, n_boot=50)
+    pd.testing.assert_frame_equal(table[plain.columns], plain)
+    for column in ('reference_mean', 'test_mean', 'difference_samples', 't', 'df', 'pvalue_samples',
+                   'n_reference', 'n_test'):
+        assert column in table.columns
+    assert (table['pvalue_samples'] > .05).all() and (table['n_test'] == 3).all()
+    gres, labels, conditions, samples = _samples_setup(True)
+    table = scRL.compare_fates(gres, 'A', 'B', key='lineage', samples=samples, n_permutations=200, n_boot=50)
+    assert table.loc['branchB', 'pvalue_samples'] < .01 and table.loc['branchB', 'test_mean'] == 0
+    with pytest.raises(ValueError, match='two'):
+        scRL.compare_fates(gres, 'A', 'B', key='lineage', samples=np.array([c + '0' for c in conditions]))
+
+
+def test_compare_abundance_cluster_shares_across_samples():
+    gres, labels, conditions, samples = _samples_setup(True)
+    scRL.compare_abundance(gres, 'A', 'B', samples=samples, n_shuffles=3)
+    table = gres.grids['abundance_clusters']
+    for column in ('share_reference', 'share_test', 'pvalue_samples', 'qvalue_samples'):
+        assert column in table.columns
+    for cluster in ('trunk', 'branchB'):
+        per = [np.mean(labels[samples == s] == cluster) for s in ('A0', 'A1', 'A2')]
+        assert table.loc[cluster, 'share_test'] == pytest.approx(np.mean(per))
+    assert table.loc['branchB', 'qvalue_samples'] < .05

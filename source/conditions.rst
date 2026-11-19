@@ -53,3 +53,24 @@ cells of the lineage there is nothing to reach, and its value toward the lineage
 
 ``scRL.compare_fates`` compares the share of each condition's cells in each lineage (for example the heaviest
 lineage from ``fate_gate``), with bootstrap intervals and a label-permutation p-value.
+
+Replicate samples
+-----------------
+
+Without ``samples`` every test is across cells. It cannot tell a difference between conditions from a
+difference between two libraries, so with one library per condition read the calls as a description of these
+two libraries. When each condition has several libraries, pass one sample label per cell as ``samples``:
+
+.. code-block:: python
+
+    scRL.shares_by_sample(gres, adata.obs['library'], key='gate_top')      # one row per library
+    scRL.compare_fates(gres, 'knockout', 'control', samples=adata.obs['library'])
+    scRL.compare_abundance(gres, 'knockout', 'control', samples=adata.obs['library'])
+
+The grid-point test of ``compare_abundance`` is then made across samples. It is valid but has little power
+with a handful of libraries: three or four per condition can leave almost no grid point called after
+correction. Where each library contributes one number the comparison has power: the share of each library's
+cells per lineage (``compare_fates``, which adds means over samples and a Welch t-test across samples) and per
+cluster (the ``share_reference``, ``share_test``, ``pvalue_samples`` and ``qvalue_samples`` columns of
+``gres.grids['abundance_clusters']``). With replicates, read the grid map as the picture and these tables as
+the test.

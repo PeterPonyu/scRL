@@ -167,6 +167,8 @@ scRL.compare_abundance(gres, test='knockout', reference='control')
 scRL.plot_conditions(gres)
 ```
 
+With several libraries per condition pass `samples=` (one library label per cell) to `compare_abundance` and `compare_fates`: the share of each library's cells per cluster and per lineage is then compared across libraries, which is where a difference between conditions can be shown with a handful of libraries; `scRL.shares_by_sample` gives the per-library table.
+
 ## Documentation
 
 Comprehensive documentation is available at [https://scrl.readthedocs.io](https://scrl.readthedocs.io/en/latest/)

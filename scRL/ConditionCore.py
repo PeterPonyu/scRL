@@ -138,7 +138,13 @@ def compare_abundance(gres, test, reference, min_cells=3, alpha=.05, samples=Non
         (Default: .05)
     samples
         One sample label per cell (each sample in one condition, at least two per condition): test across
-        samples instead of across cells.
+        samples instead of across cells, and add to the per-cluster table the share of each sample's cells per
+        cluster with a test across samples. Without samples every test is across cells and cannot tell a
+        difference between conditions from a difference between two libraries; with one library per condition
+        read the calls as a description of these two libraries. With samples the grid-point test is valid but
+        has little power with a handful of libraries (three or four per condition can leave almost no grid
+        point called after correction); the per-cluster shares, where each library contributes one number,
+        are where differences show.
         (Default: None)
     n_shuffles
         Label shufflings for the numbers expected by chance.
@@ -153,7 +159,10 @@ def compare_abundance(gres, test, reference, min_cells=3, alpha=.05, samples=Non
     ``pvalue``, ``qvalue``, ``class``, ``call``. Stored as ``gres.grids['abundance']``, with the arrays
     ``abundance_log2fc`` (NaN where not tested), ``abundance_qvalue``, ``abundance_class``,
     ``abundance_call``, their colour dicts ``abundance_class_colors`` and ``abundance_call_colors``, the names
-    ``abundance_test`` and ``abundance_reference``, and the per-cluster summary ``abundance_clusters``.
+    ``abundance_test`` and ``abundance_reference``, and the per-cluster summary ``abundance_clusters`` (with
+    ``samples`` also ``share_reference``, ``share_test``: the mean over samples of the share of a sample's cells
+    in the cluster, ``pvalue_samples`` from a Welch t-test across samples and ``qvalue_samples``,
+    Benjamini-Hochberg over clusters).
     """
     labels = _conditions(gres, test, reference)
     if 'condition_counts' not in gres.grids:
@@ -217,7 +226,21 @@ def compare_abundance(gres, test, reference, min_cells=3, alpha=.05, samples=Non
     gres.grids['abundance_call_colors'] = {'depleted': '#2166ac', 'enriched': '#b2182b',
                                            'no difference': '#8c8c8c', 'too few cells': '#e0e0e0'}
     gres.grids['abundance_test'], gres.grids['abundance_reference'] = test, reference
-    gres.grids['abundance_clusters'] = pd.DataFrame(rows, index=order)
+    summary = pd.DataFrame(rows, index=order)
+    if samples is not None and 'clusters' in gres.embedding and 'mapped_grids_clusters' in gres.grids:
+        per_sample, of = _sample_conditions(gres, samples, (test, reference))
+        cell_clusters = np.asarray(gres.embedding['clusters']).astype(str)
+        shares = {s: [(cell_clusters[per_sample == s] == str(c)).mean() for c in order] for s in of}
+        a = np.array([shares[s] for s in of if of[s] == test])
+        b = np.array([shares[s] for s in of if of[s] == reference])
+        _, _, p = _welch(a, b)
+        summary['share_reference'], summary['share_test'] = b.mean(0), a.mean(0)
+        summary['pvalue_samples'] = p
+        q = np.full(len(p), np.nan)
+        ok = ~np.isnan(p)
+        q[ok] = _bh(p[ok])
+        summary['qvalue_samples'] = q
+    gres.grids['abundance_clusters'] = summary
     return table
 
 
@@ -506,9 +529,84 @@ def _cluster_table(d, null, clusters, order, spread):
     return pd.DataFrame(rows, index=order)
 
 
-def compare_fates(gres, test, reference, key='gate_top', n_permutations=2000, n_boot=500, seed=0):
+def _sample_conditions(gres, samples, names=None):
+    """The condition of each sample (a sample must hold the cells of one condition only)."""
+    labels = np.asarray(gres.embedding['conditions'])
+    samples = np.asarray(samples).astype(str)
+    if len(samples) != len(labels):
+        raise ValueError(f'samples has {len(samples)} labels but there are {len(labels)} cells.')
+    of = {}
+    for s in sorted(set(samples.tolist())):
+        held = sorted(set(labels[samples == s].tolist()))
+        if len(held) > 1:
+            raise ValueError(f'Sample {s!r} holds cells of more than one condition ({held}).')
+        of[s] = held[0]
+    if names is not None:
+        for name in names:
+            n = sum(c == name for c in of.values())
+            if n < 2:
+                raise ValueError(f'Condition {name!r} has {n} sample(s); a test across samples needs at least two '
+                                 f'per condition.')
+    return samples, of
+
+
+def _welch(a, b):
+    """Welch t statistic, degrees of freedom and two-sided p-value of mean(a) - mean(b), per column."""
+    ma, mb = a.mean(0), b.mean(0)
+    va, vb = a.var(0, ddof=1) / len(a), b.var(0, ddof=1) / len(b)
+    se2 = va + vb
+    with np.errstate(divide='ignore', invalid='ignore'):
+        t = (ma - mb) / np.sqrt(se2)
+        df = se2 ** 2 / (va ** 2 / (len(a) - 1) + vb ** 2 / (len(b) - 1))
+        p = 2 * stats.t.sf(np.abs(t), df)
+    return t, df, p
+
+
+def shares_by_sample(gres, samples, key='gate_top'):
+    """
+    Share of each sample's cells in each category of a cell label (for example the heaviest lineage).
+
+    With replicate samples (libraries) the sample is the unit of a comparison: each sample contributes one
+    share per category, so a difference between two samples is not mistaken for a difference between
+    conditions.
+
+    Parameters
+    ----------
+    gres
+        Grids results after ``project_conditions`` holding the cell label ``gres.embedding[key]``.
+    samples
+        One sample label per cell; a sample holds the cells of one condition only.
+    key
+        Cell label to count.
+        (Default: 'gate_top', from ``fate_gate``)
+
+    Returns
+    ----------
+    DataFrame, one row per sample: ``condition`` and the share of the sample's cells in each category (the
+    shares of a row sum to 1).
+    """
+    if 'conditions' not in gres.embedding:
+        raise ValueError('No conditions on the grid: call project_conditions(gres, conditions) first.')
+    if key not in gres.embedding:
+        raise KeyError(f'{key!r} is not stored for the cells; available keys: {sorted(map(str, gres.embedding))}')
+    samples, of = _sample_conditions(gres, samples)
+    cell_key = np.asarray(gres.embedding[key]).astype(str)
+    cats = sorted(set(cell_key.tolist()))
+    rows = {s: [(cell_key[samples == s] == c).mean() for c in cats] for s in of}
+    table = pd.DataFrame.from_dict(rows, orient='index', columns=cats)
+    table.insert(0, 'condition', [of[s] for s in table.index])
+    return table
+
+
+def compare_fates(gres, test, reference, key='gate_top', samples=None, n_permutations=2000, n_boot=500, seed=0):
     """
     Share of each condition's cells in each category of a cell label (for example the heaviest lineage).
+
+    Without ``samples`` the comparison is across cells: it cannot tell a difference between conditions from a
+    difference between two libraries, so with one library per condition read it as a description of these two
+    libraries. With ``samples`` (at least two per condition) each sample contributes one share per category and
+    the shares are also compared across samples (Welch t-test); with a handful of libraries this is where a
+    difference between conditions can be shown.
 
     Parameters
     ----------
@@ -519,6 +617,9 @@ def compare_fates(gres, test, reference, key='gate_top', n_permutations=2000, n_
     key
         Cell label to count.
         (Default: 'gate_top', from ``fate_gate``)
+    samples
+        One sample label per cell (each sample in one condition, at least two per condition).
+        (Default: None)
     n_permutations
         Label permutations for the p-values.
         (Default: 2000)
@@ -533,7 +634,9 @@ def compare_fates(gres, test, reference, key='gate_top', n_permutations=2000, n_
     ----------
     DataFrame indexed by category: ``reference``, ``reference_low``, ``reference_high``, ``test``,
     ``test_low``, ``test_high`` (shares with 95% bootstrap intervals), ``difference`` (test minus reference)
-    and ``pvalue`` (two-sided, from permuting the condition labels).
+    and ``pvalue`` (two-sided, from permuting the condition labels). With ``samples`` also
+    ``reference_mean`` and ``test_mean`` (means over samples), ``difference_samples``, ``t``, ``df`` and
+    ``pvalue_samples`` (Welch t-test across samples), and ``n_reference``, ``n_test`` (numbers of samples).
     """
     labels = _conditions(gres, test, reference)
     if key not in gres.embedding:
@@ -557,8 +660,20 @@ def compare_fates(gres, test, reference, key='gate_top', n_permutations=2000, n_
     for _ in range(n_permutations):
         pt, pr = shares(rng.permutation(is_test))
         count += np.abs(pt - pr) >= np.abs(diff)
-    return pd.DataFrame({'reference': sr, 'reference_low': np.percentile(boot_r, 2.5, axis=0),
-                         'reference_high': np.percentile(boot_r, 97.5, axis=0),
-                         'test': st, 'test_low': np.percentile(boot_t, 2.5, axis=0),
-                         'test_high': np.percentile(boot_t, 97.5, axis=0),
-                         'difference': diff, 'pvalue': (1 + count) / (n_permutations + 1)}, index=cats)
+    table = pd.DataFrame({'reference': sr, 'reference_low': np.percentile(boot_r, 2.5, axis=0),
+                          'reference_high': np.percentile(boot_r, 97.5, axis=0),
+                          'test': st, 'test_low': np.percentile(boot_t, 2.5, axis=0),
+                          'test_high': np.percentile(boot_t, 97.5, axis=0),
+                          'difference': diff, 'pvalue': (1 + count) / (n_permutations + 1)}, index=cats)
+    if samples is not None:
+        _, of = _sample_conditions(gres, samples, (test, reference))
+        per = shares_by_sample(gres, samples, key)
+        per = per[per['condition'].isin([test, reference])]
+        values = per.reindex(columns=cats, fill_value=0.0)
+        a = values[per['condition'] == test].to_numpy(dtype=float)
+        b = values[per['condition'] == reference].to_numpy(dtype=float)
+        t, df, p = _welch(a, b)
+        table['reference_mean'], table['test_mean'] = b.mean(0), a.mean(0)
+        table['difference_samples'], table['t'], table['df'], table['pvalue_samples'] = a.mean(0) - b.mean(0), t, df, p
+        table['n_reference'], table['n_test'] = len(b), len(a)
+    return table
