@@ -457,3 +457,89 @@ def test_slices_and_views_fit():
     for fig in (scRL.plot_slices(gres, key='pseudotime'), scRL.plot_slices(gres, key='clusters'),
                 scRL.plot_slices(gres, key='pseudotime', cells=True), scRL.plot_views(gres, key='pseudotime')):
         _assert_layout(fig)
+
+
+def _string_key(gres, long=False):
+    """A string key on the grid: which third of the first axis each kept point lies in."""
+    G = gres.grids['grids'][gres.grids['mapped_grids']]
+    cuts = np.quantile(G[:, 0], [1 / 3, 2 / 3])
+    names = ['early', 'middle', 'late']
+    if long:
+        names[2] = 'a category name of thirty chars'
+    gres.grids['part'] = np.array(names, dtype=object)[np.searchsorted(cuts, G[:, 0])]
+    return names
+
+
+def test_categorical_key_with_stored_colours():
+    from matplotlib.colors import to_rgba
+    gres = _gres(3)
+    _string_key(gres)
+    gres.grids['part_colors'] = {'late': '#ff0000', 'early': '#00ff00', 'middle': '#0000ff'}
+    ax = scRL.plot_grids(gres, key='part')
+    texts = [t.get_text() for t in ax.get_legend().get_texts()]
+    assert texts == ['late', 'early', 'middle']
+    for h in ax.get_legend().legend_handles:
+        assert to_rgba(h.get_color()) == to_rgba(gres.grids['part_colors'][h.get_label()])
+    travel = gres.grids['mapped_travel']
+    pos = {g: p for p, g in enumerate(gres.grids['mapped_grids'])}
+    expected = np.array([to_rgba(gres.grids['part_colors'][gres.grids['part'][pos[g]]])[:3] for g in travel])
+    np.testing.assert_allclose(_drawn_rgb(ax), expected[np.lexsort(expected.T)])
+
+
+def test_categorical_key_default_colours_and_cells():
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import to_rgba
+    gres = _gres(3)
+    gres.embedding['which'] = np.where(np.asarray(gres.embedding['clusters']) == 'root', 'start', 'rest')
+    ax = scRL.plot_grids(gres, key='which', cells=True)
+    handles = ax.get_legend().legend_handles
+    assert [h.get_label() for h in handles] == ['rest', 'start']
+    assert [to_rgba(h.get_color()) for h in handles] == [to_rgba(c) for c in plt.get_cmap('tab10').colors[:2]]
+
+
+def test_vcenter_and_explicit_limits():
+    gres = _gres(3)
+    gres.grids['shifted'] = np.asarray(gres.grids['pseudotime']) - .2
+    pos = {g: p for p, g in enumerate(gres.grids['mapped_grids'])}
+    drawn = gres.grids['shifted'][[pos[g] for g in gres.grids['mapped_travel']]]
+    ax = scRL.plot_grids(gres, key='shifted', vcenter=0)
+    lo, hi = ax.collections[-1].get_clim()
+    assert lo == -hi and hi == pytest.approx(np.abs(drawn).max())
+    ax = scRL.plot_grids(gres, key='shifted', vcenter=0, vmin=-.1)
+    assert ax.collections[-1].get_clim() == (-.1, pytest.approx(np.abs(drawn).max()))
+    fig = scRL.plot_slices(gres, key='shifted', vcenter=0)
+    lo, hi = [c for ax in fig.axes for c in ax.collections if c.get_array() is not None][0].get_clim()
+    assert lo == -hi
+
+
+def test_missing_values_are_grey_and_do_not_set_limits():
+    from matplotlib.colors import to_rgba
+    gres = _gres(3)
+    values = np.asarray(gres.grids['pseudotime'], dtype=float).copy()
+    values[::3] = np.nan
+    values[1] = 100.0 if np.isnan(values[1]) else values[1]
+    gres.grids['holes'] = values
+    ax = scRL.plot_grids(gres, key='holes')
+    grey, coloured = ax.collections[0], ax.collections[1]
+    travel = gres.grids['mapped_travel']
+    pos = {g: p for p, g in enumerate(gres.grids['mapped_grids'])}
+    n_missing = int(np.isnan(values[[pos[g] for g in travel]]).sum())
+    assert len(grey.get_offsets()) == n_missing > 0
+    assert to_rgba(grey.get_facecolor()[0]) == to_rgba('#d9d9d9')
+    finite = values[[pos[g] for g in travel]]
+    finite = finite[~np.isnan(finite)]
+    assert coloured.get_clim() == (finite.min(), finite.max())
+    gres.grids['empty'] = np.full(len(values), np.nan)
+    with pytest.raises(ValueError):
+        scRL.plot_grids(gres, key='empty')
+    _assert_layout(scRL.plot_projections(gres, key='holes'))
+
+
+def test_categorical_projection_and_layouts():
+    gres = _gres(3)
+    _string_key(gres, long=True)
+    fig = scRL.plot_projections(gres, key='part')
+    assert [t.get_text() for t in fig.legends[0].get_texts()] == sorted(set(gres.grids['part']))
+    for fig in (fig, scRL.plot_views(gres, key='part'), scRL.plot_slices(gres, key='part')):
+        _assert_layout(fig)
+        assert not [ax for ax in fig.axes if ax.get_label() == '<colorbar>']
