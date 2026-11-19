@@ -23,9 +23,28 @@ def test_three_agents_train_in_3d(algo):
     t = scRL.trainer(algo, gres, reward_type='d', reward_mode='Decision', starts_prob=False, X_latent=Z, num_episodes=300)
     returns, _ = t.train()
     assert len(returns) == 300 and np.isfinite(returns).all()
-    if algo != 'DDQN':                                  # eval_fate has no DDQN branch
-        t.eval_fate()
-        assert np.isfinite(np.asarray(gres.grids['fate_branchA'], dtype=float)).all()
+    t.eval_fate()
+    assert np.isfinite(np.asarray(gres.grids['fate_branchA'], dtype=float)).all()
+
+
+@pytest.mark.parametrize('d', [2, 3])
+def test_ddqn_fate_is_the_mean_q_value(d, scan2d):
+    import torch
+    if d == 2:
+        gres, Z = scan2d, make_tree(d=2)[2]
+    else:
+        gres, Z = _ready(3)
+    scRL.d_rewards(gres, starts=['root'], ends=['branchA'])
+    seed_all(0)
+    t = scRL.trainer('DDQN', gres, reward_type='d', starts_prob=False, X_latent=Z, num_episodes=100)
+    t.train()
+    t.eval_fate()
+    fate = np.asarray(gres.grids['fate_branchA'], dtype=float)
+    assert fate.shape == (len(gres.grids['mapped_grids']),) and np.isfinite(fate).all()
+    net = t.agent.policy_net
+    states = torch.tensor(t.env.state_space.mean(axis=1), device=next(net.parameters()).device)
+    expected = net(states).mean(dim=1).detach().cpu().numpy()
+    np.testing.assert_allclose(fate, expected, rtol=0, atol=1e-6)
 
 
 def test_decision_value_readout_in_3d():

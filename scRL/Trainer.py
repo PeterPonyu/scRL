@@ -147,9 +147,17 @@ class trainer:
                                    self.num_episodes
                                   )
     def eval_fate(self,):
+        """
+        Store the value of every kept grid point as ``gres.grids['fate_<reward key>']``.
+
+        ActorCritic: the critic's state value. DDQN and TabularQ: the mean over actions of the Q-values of
+        the grid point (for DDQN, the policy network applied to the grid point's state vector).
+        """
         key = self.gres.qlearning['reward_key']
-        if self.algo in ['ActorCritic', 'DDQN']:
+        if self.algo == 'ActorCritic':
             self.gres.grids[f'fate_{key}'] = self.agent.critic(torch.tensor(self.env.state_space.mean(axis=1),device=device)).detach().cpu().numpy().ravel()
+        elif self.algo == 'DDQN':
+            self.gres.grids[f'fate_{key}'] = self.agent.policy_net(torch.tensor(self.env.state_space.mean(axis=1),device=device)).mean(dim=1).detach().cpu().numpy()
         else:
             self.gres.grids[f'fate_{key}'] = self.agent.Q.mean(axis=1)
     
