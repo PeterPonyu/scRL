@@ -218,3 +218,18 @@ def test_split_grid_pseudotime_does_not_depend_on_stored_order(scan2d, cut, star
     a, b = nd.grids['pseudotime'], shuffled.grids['pseudotime']
     assert not np.array_equal(a.index, b.index)
     np.testing.assert_allclose(b.loc[a.index].values, a.values, rtol=0, atol=1e-12)
+
+
+def test_2d_reward_functions_accept_a_single_cluster_name(scan2d):
+    import copy
+    listed, named = scan2d, copy.deepcopy(scan2d)
+    scRL.d_rewards(listed, starts=['root'], ends=['branchA'])
+    scRL.d_rewards(named, starts='root', ends='branchA')
+    pd.testing.assert_frame_equal(named.qlearning['d_Decision_rewards'], listed.qlearning['d_Decision_rewards'])
+    for key in ('starts_cluster_grids', 'ends_cluster_grids'):
+        assert list(named.grids[key]) == list(listed.grids[key]) and len(listed.grids[key]) > 0
+    assert named.qlearning['reward_key'] == listed.qlearning['reward_key'] == 'branchA'
+    scRL.c_rewards(listed, reward_keys=['geneA'], starts=['root'])
+    scRL.c_rewards(named, reward_keys=['geneA'], starts='root')
+    pd.testing.assert_frame_equal(named.qlearning['c_Decision_rewards'], listed.qlearning['c_Decision_rewards'])
+    assert list(named.grids['starts_cluster_grids']) == list(listed.grids['starts_cluster_grids'])

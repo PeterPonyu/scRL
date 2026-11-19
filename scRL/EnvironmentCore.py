@@ -6,7 +6,7 @@ import tqdm
 from collections import namedtuple, deque
 from .utils import get_dist
 from .GridNDCore import is_nd
-from .EnvironmentNDCore import d_rewards_nd, c_rewards_nd, MISSING_STARTS_PROBS
+from .EnvironmentNDCore import d_rewards_nd, c_rewards_nd, MISSING_STARTS_PROBS, _as_list
 
 
 class deepEnv:
@@ -182,6 +182,7 @@ def d_rewards(gres,
     """
     if is_nd(gres):
         return d_rewards_nd(gres, starts, ends, beta, mode)
+    starts, ends = _as_list(starts), _as_list(ends)
     start_time = time.time()
     masked_grids = gres.grids['masked_grids']
     mapped_grids = gres.grids['mapped_grids']
@@ -284,6 +285,8 @@ def c_rewards(gres,
     """
     if is_nd(gres):
         return c_rewards_nd(gres, reward_keys, starts, starts_keys, punish_keys, beta, mode)
+    if starts is not None:
+        starts = _as_list(starts)
     start_time = time.time()
     masked_grids = gres.grids['masked_grids']
     mapped_grids = gres.grids['mapped_grids']
