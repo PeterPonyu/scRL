@@ -155,9 +155,9 @@ class trainer:
         """
         key = self.gres.qlearning['reward_key']
         if self.algo == 'ActorCritic':
-            self.gres.grids[f'fate_{key}'] = self.agent.critic(torch.tensor(self.env.state_space.mean(axis=1),device=device)).detach().cpu().numpy().ravel()
+            self.gres.grids[f'fate_{key}'] = self.agent.critic(torch.tensor(self.env.state_space.mean(axis=1),dtype=torch.float,device=device)).detach().cpu().numpy().ravel()
         elif self.algo == 'DDQN':
-            self.gres.grids[f'fate_{key}'] = self.agent.policy_net(torch.tensor(self.env.state_space.mean(axis=1),device=device)).mean(dim=1).detach().cpu().numpy()
+            self.gres.grids[f'fate_{key}'] = self.agent.policy_net(torch.tensor(self.env.state_space.mean(axis=1),dtype=torch.float,device=device)).mean(dim=1).detach().cpu().numpy()
         else:
             self.gres.grids[f'fate_{key}'] = self.agent.Q.mean(axis=1)
     

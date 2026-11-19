@@ -120,3 +120,24 @@ def test_simulator_runs(d, scan2d):
     scRL.get_sim_df(gres, t, lineages=['branchA', 'branchB'], steps=5, prefix='s')
     assert gres.simulating['s_df_coord'].shape[1] == d
     assert gres.simulating['s_df_exp'].shape[1] == 3
+
+
+@pytest.mark.parametrize('d', [2, 3])
+def test_values_from_a_double_precision_latent_space(d, scan2d):
+    if d == 2:
+        gres, Z = scan2d, make_tree(d=2)[2]
+    else:
+        gres, Z = _ready(3)
+    Z = Z.astype(np.float64)
+    scRL.d_rewards(gres, starts=['root'], ends=['branchA'])
+    M = len(gres.grids['mapped_grids'])
+    for algo in ('ActorCritic', 'DDQN'):
+        seed_all(0)
+        t = scRL.trainer(algo, gres, reward_type='d', starts_prob=False, X_latent=Z, num_episodes=50)
+        t.train()
+        t.eval_fate()
+        fate = np.asarray(gres.grids['fate_branchA'], dtype=float)
+        assert fate.shape == (M,) and np.isfinite(fate).all()
+        if algo == 'ActorCritic':
+            scRL.get_state_value(gres, t, 'v')
+            assert gres.grids['v'].shape == (M,) and np.isfinite(gres.grids['v']).all()
