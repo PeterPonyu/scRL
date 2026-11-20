@@ -575,3 +575,6 @@ def test_fate_comparisons_default_to_the_walk():
         scRL.compare_fates(gres, 'A', 'B')
     with pytest.raises(KeyError, match="fate_probabilities first, or pass key='gate_top'"):
         scRL.shares_by_sample(gres, samples)
+    gres.embedding['fate_top'] = np.where(labels == 'root', 'A', 'B')
+    with pytest.raises(ValueError, match="key='fate'"):
+        scRL.compare_fates(gres, 'A', 'B', stat='mean')

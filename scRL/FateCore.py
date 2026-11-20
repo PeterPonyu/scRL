@@ -145,12 +145,13 @@ def fate_probabilities(gres, ends, forward=.25, steps=5000, policy=None, key_add
     clusters are given as the ends of each lineage.
 
     The default is a mild bias (``forward=0.25``) with a large move budget (``steps=5000``). At ``forward``
-    of 1 and above each move is strongly drawn to later pseudotime (at 1, a move one median pseudotime step
-    later weighs about e times a move that keeps pseudotime), so a walk seldom moves back toward a neighbouring
-    branch. A smaller value lets it do so, which can keep fate signals of neighbouring lineages at early grid
-    points, and needs more moves to arrive, hence the larger budget. When more than 10% of the grid points
-    still gain over 0.01 of arriving share in the last tenth of the moves, a warning says so; then raise
-    ``steps`` or accept that those points show no lineage (check ``<key_add>_reached``).
+    of 1 and above each move is strongly drawn to later pseudotime: at 1, a move one median pseudotime step
+    later weighs about seven times (e squared) a move the same step earlier, so walks turn back toward a
+    neighbouring branch less often. A smaller value lets them do so more often, which can keep fate signals of
+    neighbouring lineages at early grid points, and needs more moves to arrive, hence the larger budget. When
+    more than 10% of the grid points still gain over 0.01 of arriving share in the last tenth of the moves, a
+    warning says so; then raise ``steps`` or accept that those points show no lineage (check
+    ``<key_add>_reached``). The check is skipped for ``steps`` below 20, a deliberately short horizon.
 
     Parameters
     ----------
@@ -236,7 +237,7 @@ def fate_probabilities(gres, ends, forward=.25, steps=5000, policy=None, key_add
             before = H_free.copy()
         H_free = P_ff @ H_free + B
     still = int(((H_free - before).sum(1) > .01).sum()) / M
-    if still > .1:
+    if steps >= 20 and still > .1:
         warnings.warn(f"{still:.0%} of grid points are still collecting arriving walks at the last of {steps} "
                       f"moves; raise steps (check '{key_add}_reached') or accept that these points show no "
                       f"lineage.", UserWarning, stacklevel=2)

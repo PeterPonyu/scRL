@@ -155,7 +155,7 @@ scRL.fate_gate(gres, ['exact_0', 'exact_3'], names=['lineage 0', 'lineage 3'])
 scRL.plot_fates(gres)
 ```
 
-`scRL.fate_probabilities(gres, {'lineage 0': '0', 'lineage 3': '3'})` gives instead, for every grid point, the share of walks on the grid that enter each lineage first within a fixed number of moves (walks that arrive at no listed lineage are counted as 'none'), drawn with `scRL.plot_fates(gres, key_add='fate')`. By default the walk has a mild bias toward later pseudotime (`forward=0.25`) and 5,000 moves to arrive. At `forward=1` and above each move is strongly drawn to later pseudotime, so a walk seldom moves back toward a neighbouring branch; a smaller value lets it, which can keep fate signals of neighbouring lineages at early grid points, and needs more moves.
+`scRL.fate_probabilities(gres, {'lineage 0': '0', 'lineage 3': '3'})` gives instead, for every grid point, the share of walks on the grid that enter each lineage first within a fixed number of moves (walks that arrive at no listed lineage are counted as 'none'), drawn with `scRL.plot_fates(gres, key_add='fate')`. By default the walk has a mild bias toward later pseudotime (`forward=0.25`) and 5,000 moves to arrive. At `forward=1` a move one median pseudotime step later weighs about seven times (e squared) one the same step earlier, so walks turn back toward a neighbouring branch less often; a smaller value lets them do so more often, which can keep fate signals of neighbouring lineages at early grid points, and needs more moves.
 
 ## Comparing conditions
 

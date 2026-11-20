@@ -608,6 +608,9 @@ def _statistic(gres, key, stat, cells):
         return (cell_key[:, None] == np.array(cats)[None, :]).astype(float), cats
     if stat != 'mean':
         raise ValueError(f"stat must be 'top' or 'mean', got {stat!r}")
+    if str(key).endswith('_top'):
+        raise ValueError(f"stat='mean' needs the walk shares, for example key='fate' (key_add of "
+                         f"fate_probabilities), not a heaviest-lineage label such as {key!r}.")
     table = gres.grids.get(key)
     names = [str(c) for c in table.columns] if isinstance(table, pd.DataFrame) else []
     names = [n for n in names if f'{key}_{n}' in gres.embedding]
@@ -804,8 +807,9 @@ def compare_fates(gres, test, reference, key='fate_top', samples=None, n_permuta
         (Default: 0)
     stat
         'top': share of cells in each category; 'mean': mean of each per-lineage column over the cells (cells
-        with a missing value are left out of that column's mean). The permutations and the bootstrap act on
-        the statistic.
+        with a missing value are left out of that column's mean). ``stat='mean'`` needs the walk shares, so
+        pass ``key='fate'`` (the ``key_add`` of ``fate_probabilities``), not a ``_top`` label. The permutations
+        and the bootstrap act on the statistic.
         (Default: 'top')
     within
         Compare only these cells: a boolean mask over cells or a list of cluster names.

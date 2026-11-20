@@ -23,11 +23,11 @@ Exact solution
 
 ``scRL.exact_values`` computes, for every kept grid point, the best discounted return under the rules of the
 learners (a move off the grid costs -2 and ends the episode, a step onto the boundary outside the start
-cluster ends it, at most ``max_step + 1`` moves) by backward induction over the moves. The solver has no random element and
-takes well under a second. It stores the values as ``gres.grids['exact_<reward key>']`` and the best move from
-every grid point as ``gres.grids['exact_<reward key>_move']``. On a regular lattice several moves are often
-equally good; ``gres.grids['exact_<reward key>_best']`` marks all of them, and ``plot_policy`` and
-``plot_slices(policy=...)`` draw their mean, which is the reading to use.
+cluster ends it, at most ``max_step + 1`` moves) by backward induction over the moves. The solver has no
+random element and takes well under a second. It stores the values as ``gres.grids['exact_<reward key>']``
+and the best move from every grid point as ``gres.grids['exact_<reward key>_move']``. On a regular lattice
+several moves are often equally good; ``gres.grids['exact_<reward key>_best']`` marks all of them, and
+``plot_policy`` and ``plot_slices(policy=...)`` draw their mean, which is the reading to use.
 
 Its input does have one: ``align_pseudotime`` samples its start points from the early cluster, so
 pseudotime, and with it the rewards, depends on the draw. Give it ``seed`` (for example ``seed=0``) to make
@@ -44,9 +44,9 @@ tabular environment follows other rules (it also pays the pseudotime change on e
 revisit differently), so the bound is not for it. Inside a rewarded region the best relaxed path may go back
 and forth between neighbouring rewarded points, and the value there approaches reward / (1 - gamma). A
 greedy policy read from the exact solution and run under the deep environment's rules reaches the lineage
-and then ends by revisiting a point, so its return is lower than the exact value. Read the value of a grid point as the discounted distance to the
-best-paying part of the lineage: its entry with 'Decision' rewards, its far end with 'Contribution' rewards.
-It is not the amount of rewarded territory.
+and then ends by revisiting a point, so its return is lower than the exact value. Read the value of a grid
+point as the discounted distance to the best-paying part of the lineage: its entry with 'Decision' rewards,
+its far end with 'Contribution' rewards. It is not the amount of rewarded territory.
 
 Lineage gate
 ------------
@@ -70,11 +70,12 @@ Lineage shares
 ``scRL.fate_probabilities`` gives, for every grid point, the share of walks starting there that enter the end
 points of each lineage first within ``steps`` moves. ``forward`` biases the walk toward later pseudotime (0
 is the unbiased walk). The default is a mild bias, ``forward=0.25``, with 5,000 moves. At ``forward`` of 1
-and above each move is strongly drawn to later pseudotime (at 1, a move one median pseudotime step later
-weighs about e times a move that keeps pseudotime), so a walk seldom moves back toward a neighbouring
-branch. A smaller value lets it do so, which can keep fate signals of neighbouring lineages at early grid
-points, and needs more moves to arrive, hence the larger budget. When many grid points are still collecting
-arriving walks in the last tenth of the moves, a warning asks for more ``steps``. The shares are not
+and above each move is strongly drawn to later pseudotime: at 1, a move one median pseudotime step later
+weighs about seven times (e squared) a move the same step earlier, so walks turn back toward a neighbouring
+branch less often. A smaller value lets them do so more often, which can keep fate signals of neighbouring
+lineages at early grid points, and needs more moves to arrive, hence the larger budget. When many grid points
+are still collecting arriving walks in the last tenth of the moves, a warning asks for more ``steps`` (not
+for fewer than 20 moves, a deliberately short horizon). The shares are not
 renormalised: they sum to the share of walks that arrive at any listed lineage (``fate_reached``), so a region
 whose walks do not arrive, for example a tip that is not among the listed lineages, shows up as 'none'. At
 early grid points the split among lineages depends on ``forward`` and on which clusters are given as the ends

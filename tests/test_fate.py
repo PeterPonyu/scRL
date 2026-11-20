@@ -184,7 +184,9 @@ def test_shares_gamblers_ruin_and_short_walks():
     shares = scRL.fate_probabilities(g, {'L': 'left', 'R': 'right'}, forward=0, steps=20000)
     np.testing.assert_allclose(shares['R'].to_numpy(), np.arange(12) / 11, atol=1e-6)
     np.testing.assert_allclose(shares.sum(1), 1, atol=1e-6)
-    with pytest.warns(UserWarning, match='raise steps'):
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter('error')                                    # a short horizon is not warned about
         short = scRL.fate_probabilities(g, {'L': 'left', 'R': 'right'}, forward=0, steps=3, key_add='short')
     reached = short.sum(1).to_numpy()
     distance = np.minimum(np.arange(12), 11 - np.arange(12))
@@ -231,11 +233,8 @@ def test_shares_stay_valid_at_any_bias(forward):
 
 def test_one_move_shares_count_the_neighbours():
     """With an unbiased walk and one move, a share is the fraction of a point's neighbours in that lineage."""
-    import warnings
     gres = _gres()
-    with warnings.catch_warnings():
-        warnings.simplefilter('ignore', UserWarning)
-        shares = scRL.fate_probabilities(gres, ENDS, forward=0, steps=1)
+    shares = scRL.fate_probabilities(gres, ENDS, forward=0, steps=1)
     nb = gres.grids['neighbors']
     clusters = np.asarray(gres.grids['mapped_grids_clusters'])
     free = ~np.isin(clusters, ['branchA', 'branchB'])
