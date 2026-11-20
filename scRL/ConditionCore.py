@@ -157,7 +157,8 @@ def compare_abundance(gres, test, reference, min_cells=3, alpha=.05, samples=Non
         Scale of the per-cluster test across samples: 'log' compares log2((count + 0.5) / (cells + 1)) of each
         sample (count: its cells in the cluster; cells: all its cells), 'share' compares the shares. A
         difference of shares is dominated by the large clusters and by the samples with the most extreme
-        composition; a ratio is not, so the log scale finds a change in one cluster that the share scale misses.
+        composition; a ratio is not, so the log scale can find a change in one cluster that the share scale
+        misses.
         None means 'log' here, as the category is always the cluster label.
         (Default: None)
 
@@ -274,16 +275,33 @@ SCALE_RULE = ("scale='log' compares log2((count + 0.5) / (cells + 1)) per sample
 def _resolve_scale(key, scale, stat='top', standardise=False):
     """The scale of the per-sample tests: an explicit ``scale`` wins, otherwise 'log' for the cluster label."""
     if scale is None:
-        scale = 'log' if key == 'clusters' and stat == 'top' else 'share'
+        return 'log' if key == 'clusters' and stat == 'top' and not standardise else 'share'
     if scale not in ('log', 'share'):
         raise ValueError(f"scale must be 'log', 'share' or None, got {scale!r}. {SCALE_RULE}")
     if scale == 'log' and stat != 'top':
         raise ValueError("scale='log' needs stat='top' (counts of cells per category); use scale='share'.")
     if scale == 'log' and standardise:
-        raise ValueError("standardise=True is defined on the share scale only; pass scale='share'. For the cluster "
-                         "label it is the composition itself (every unit gets the pooled composition), so leave "
-                         "standardise off there.")
+        raise ValueError("scale='log' cannot be combined with standardise=True: standardising reweights shares to "
+                         "one cluster composition, which has no log-scale form here, and for the cluster label it "
+                         "leaves every unit with the pooled composition, so nothing remains to compare.")
     return scale
+
+
+def _warn_zero_counts(cats, counts, cells, condition):
+    """
+    Warn when, on the log scale, a category has no cells in some samples while the samples of the conditions
+    differ in size (median cells per sample more than 20% apart): its values then follow the size alone.
+    """
+    counts, cells, condition = np.asarray(counts, float), np.asarray(cells, float), np.asarray(condition)
+    medians = [np.median(cells[condition == c]) for c in sorted(set(condition.tolist()))]
+    if len(medians) < 2 or min(medians) <= 0 or max(medians) / min(medians) <= 1.25:
+        return
+    for i, c in enumerate(cats):
+        if (counts[:, i] == 0).any():
+            warnings.warn(f'category {c!r} has no cells in some samples while the samples of the two conditions '
+                          f'differ in size; on the log scale its values then change with the sample size alone. '
+                          f"Use scale='share'.", UserWarning, stacklevel=3)
+            return
 
 
 def _sample_test(gres, labels, samples, test, reference):
@@ -737,14 +755,17 @@ def shares_by_sample(gres, samples, key='fate_top', stat='top', within=None, sta
         Scale of the tests across samples for ``stat='top'``: 'log' compares log2((count + 0.5) / (cells + 1))
         of each sample (count: its cells in the category; cells: its cells in the comparison), 'share' compares
         the shares. None means 'log' when ``key`` is the cluster label ('clusters') and 'share' for any other
-        key; an explicit value always wins. A difference of cluster shares is dominated by the large clusters
-        and by the samples with the most extreme composition; a ratio is not, so on the log scale a change in
-        one cluster is found that the share scale misses. The log scale is unsafe for a category with no cells
-        inside a selection whose size differs between conditions: its pseudo-counted log share then changes
-        with the selection size alone. Lineage labels within a selection meet that case, which is why they keep
-        the share scale. Differences and means stay in share units on either scale. 'log' needs
-        ``stat='top'`` and ``standardise=False`` (standardising is defined on the share scale, and for the
-        cluster label it is the composition itself).
+        key; an explicit value always wins. Only the entry named 'clusters' counts as the cluster label (the
+        name is compared, not the values); for cluster labels stored under another name pass ``scale='log'``.
+        A difference of cluster shares is dominated by the large clusters and by the samples with the most
+        extreme composition; a ratio is not, so the log scale can find a change in one cluster that the share
+        scale misses. The log scale is unsafe for a category with no cells in some samples when the samples
+        of the conditions differ in size (as ``within=`` can make them): its pseudo-counted log share then
+        changes with the sample size alone. That case gives a warning, also under the default for
+        ``key='clusters'``; lineage labels keep the share scale for this reason. Differences and means stay in
+        share units on either scale. With ``standardise=True`` None means 'share'; an explicit 'log' is
+        rejected there, as standardising reweights shares and has no log-scale form. 'log' needs
+        ``stat='top'``.
         (Default: None)
 
     Returns
@@ -773,6 +794,8 @@ def shares_by_sample(gres, samples, key='fate_top', stat='top', within=None, sta
     rows = {u: _group_mean(V[m]) for u, m in units.items()}
     table = pd.DataFrame.from_dict(rows, orient='index', columns=cats)
     if scale == 'log':
+        _warn_zero_counts(cats, [V[units[u]].sum(0) for u in table.index], [units[u].sum() for u in table.index],
+                          [of[u] for u in table.index])
         for i, c in enumerate(cats):
             table[f'{c}_log2'] = [_log_share(V[units[u], i].sum(), units[u].sum()) for u in table.index]
     if standardise:
@@ -887,14 +910,17 @@ def compare_fates(gres, test, reference, key='fate_top', samples=None, n_permuta
         Scale of the tests across samples for ``stat='top'``: 'log' compares log2((count + 0.5) / (cells + 1))
         of each sample (count: its cells in the category; cells: its cells in the comparison), 'share' compares
         the shares. None means 'log' when ``key`` is the cluster label ('clusters') and 'share' for any other
-        key; an explicit value always wins. A difference of cluster shares is dominated by the large clusters
-        and by the samples with the most extreme composition; a ratio is not, so on the log scale a change in
-        one cluster is found that the share scale misses. The log scale is unsafe for a category with no cells
-        inside a selection whose size differs between conditions: its pseudo-counted log share then changes
-        with the selection size alone. Lineage labels within a selection meet that case, which is why they keep
-        the share scale. Differences and means stay in share units on either scale. 'log' needs
-        ``stat='top'`` and ``standardise=False`` (standardising is defined on the share scale, and for the
-        cluster label it is the composition itself).
+        key; an explicit value always wins. Only the entry named 'clusters' counts as the cluster label (the
+        name is compared, not the values); for cluster labels stored under another name pass ``scale='log'``.
+        A difference of cluster shares is dominated by the large clusters and by the samples with the most
+        extreme composition; a ratio is not, so the log scale can find a change in one cluster that the share
+        scale misses. The log scale is unsafe for a category with no cells in some samples when the samples
+        of the conditions differ in size (as ``within=`` can make them): its pseudo-counted log share then
+        changes with the sample size alone. That case gives a warning, also under the default for
+        ``key='clusters'``; lineage labels keep the share scale for this reason. Differences and means stay in
+        share units on either scale. With ``standardise=True`` None means 'share'; an explicit 'log' is
+        rejected there, as standardising reweights shares and has no log-scale form. 'log' needs
+        ``stat='top'``.
         (Default: None)
 
     Returns
@@ -964,6 +990,8 @@ def compare_fates(gres, test, reference, key='fate_top', samples=None, n_permuta
         b = np.array([per_sample[u] for u in units if of[u] == reference])
         tested = per_sample
         if scale == 'log':
+            _warn_zero_counts(cats, [C[m].sum(0) for m in units.values()], [m.sum() for m in units.values()],
+                              [of[u] for u in units])
             tested = {u: _log_share(C[m].sum(0), m.sum()) for u, m in units.items()}
         ya = np.array([tested[u] for u in units if of[u] == test])
         yb = np.array([tested[u] for u in units if of[u] == reference])

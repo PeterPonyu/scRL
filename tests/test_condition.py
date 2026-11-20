@@ -636,7 +636,10 @@ def test_scale_default_rule():
     with pytest.raises(ValueError, match='scale'):
         run(key='clusters', scale='ratio')
     with pytest.raises(ValueError, match='standardise'):
-        run(key='clusters', standardise=True)
+        run(key='clusters', standardise=True, scale='log')
+    std = run(key='clusters', standardise=True)                          # default resolves to the share scale
+    assert 'log2fc_samples' not in std.columns and 'difference_std' in std.columns
+    scRL.compare_fates(g, 'test', 'ref', key='clusters', standardise=True, n_permutations=10, n_boot=10)
     with pytest.raises(ValueError, match="stat='top'"):
         scRL.shares_by_sample(gl, samples_l, key='lineage', stat='mean', scale='log')
 
@@ -665,7 +668,7 @@ def test_halved_large_cluster_on_both_scales():
     assert -.6 < log.loc['c1', 'log2fc_samples'] < -.4                     # share 4/7 -> 2/5
 
 
-def test_share_scale_reproduces_the_previous_results():
+def test_share_scale_matches_the_reference_computation():
     gres, labels, conditions, samples = _samples_setup(True)
     for s in (None, samples):
         pd.testing.assert_frame_equal(
@@ -708,11 +711,62 @@ def test_log_scale_with_a_category_missing_from_some_samples():
         counts[(f'R{i}', 'ref', 'Y')] = n
         counts[(f'T{i}', 'test', 'Y')] = n // 2                           # no X cells, smaller selections
     g, samples = _counts_case(counts, key='lineage')
-    t = scRL.compare_fates(g, 'test', 'ref', key='lineage', samples=samples, scale='log', n_permutations=10,
-                           n_boot=10)
+    with pytest.warns(UserWarning, match="category 'X' has no cells in some samples"):
+        t = scRL.compare_fates(g, 'test', 'ref', key='lineage', samples=samples, scale='log', n_permutations=10,
+                               n_boot=10)
+    with pytest.warns(UserWarning, match="scale='share'"):
+        scRL.shares_by_sample(g, samples, key='lineage', scale='log')
     assert list(t.index) == ['X', 'Y']
     yt = np.log2((np.array([0, 0, 0]) + .5) / (np.array([40, 60, 50]) + 1))
     yr = np.log2((np.array([5, 5, 5]) + .5) / (np.array([85, 125, 105]) + 1))
     assert t.loc['X', 'log2fc_samples'] == pytest.approx(yt.mean() - yr.mean())
     assert t.loc['X', 'pvalue_samples'] == pytest.approx(stats.ttest_ind(yt, yr, equal_var=False).pvalue)
     assert t.loc['X', 'difference_samples'] == pytest.approx(-np.mean(5 / np.array([85, 125, 105])))
+
+
+def test_zeros_with_equal_sample_sizes_stay_silent():
+    import warnings
+    counts = {}
+    for i, n in enumerate((80, 120, 100)):
+        counts[(f'R{i}', 'ref', 'X')] = 5
+        counts[(f'R{i}', 'ref', 'Y')] = n
+        counts[(f'T{i}', 'test', 'Y')] = n + 5                             # no X cells, same sizes
+    g, samples = _counts_case(counts, key='lineage')
+    with warnings.catch_warnings():
+        warnings.simplefilter('error')
+        scRL.compare_fates(g, 'test', 'ref', key='lineage', samples=samples, scale='log', n_permutations=10,
+                           n_boot=10)
+        scRL.shares_by_sample(g, samples, key='lineage', scale='log')
+        gres, labels, conditions, samples = _samples_setup(False)
+        scRL.compare_fates(gres, 'A', 'B', key='clusters', samples=samples, n_permutations=10, n_boot=10)
+        scRL.shares_by_sample(gres, samples, key='clusters')
+        scRL.compare_abundance(gres, 'A', 'B', samples=samples, n_shuffles=3)
+
+
+def test_halving_a_cluster_is_found_on_the_log_scale_with_pairs():
+    """Halving one cluster in every block: the paired log test finds it, the paired share test does not."""
+    from scipy import stats
+    reference = [400, 200, 50, 10]
+    counts = {}
+    for b, n in enumerate(reference):
+        counts[(f'R{b}', 'ref', 'X')], counts[(f'R{b}', 'ref', 'Y')] = n, 1000 - n
+        counts[(f'T{b}', 'test', 'X')], counts[(f'T{b}', 'test', 'Y')] = n // 2, 1000 - n // 2
+    g, samples = _counts_case(counts)
+    blocks = {f'{t}{b}': f'block{b}' for b in range(4) for t in 'RT'}
+    x_ref = np.array(reference, float)
+    x_test = x_ref / 2
+    share = (x_test / 1000, x_ref / 1000)
+    log = (np.log2((x_test + .5) / 1001), np.log2((x_ref + .5) / 1001))
+    p_share, p_log = stats.ttest_rel(*share).pvalue, stats.ttest_rel(*log).pvalue
+    assert p_share > .05 and p_log < .001                                 # about 0.159 and 8.6e-6
+    assert stats.ttest_ind(*share, equal_var=False).pvalue > .05
+    assert stats.ttest_ind(*log, equal_var=False).pvalue > .05            # about 0.45 and 0.57: pairing is needed
+    for scale, (p_paired, values) in {'share': (p_share, share), 'log': (p_log, log)}.items():
+        t = scRL.compare_fates(g, 'test', 'ref', key='clusters', samples=samples, pairs=blocks, scale=scale,
+                               n_permutations=10, n_boot=10)
+        assert t.loc['X', 'pvalue_paired'] == pytest.approx(p_paired, rel=1e-10)
+        welch = stats.ttest_ind(*values, equal_var=False).pvalue
+        assert t.loc['X', 'pvalue_samples'] == pytest.approx(welch, rel=1e-10) and welch > .05
+    assert t.loc['X', 'pvalue_paired'] < .001
+    assert t.loc['X', 'log2fc_samples'] == pytest.approx(-0.978, abs=.001)
+    assert t.loc['X', 'log2fc_samples'] == pytest.approx((log[0] - log[1]).mean(), abs=1e-12)

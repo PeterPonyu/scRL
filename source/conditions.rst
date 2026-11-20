@@ -114,14 +114,19 @@ The tests across samples compare cluster shares on a log scale by default. For e
 they take log2((count + 0.5) / (cells + 1)), with count the library's cells in the cluster and cells its
 cells in the comparison (the same transform as the grid-point test), and compare these values with a Welch
 t-test, or with a paired t-test across ``pairs``. A difference of shares is dominated by the large clusters
-and by the libraries with the most extreme composition; a ratio is not, so a cluster that loses part of its
-cells is found on the log scale where a difference of shares can miss it. The tables also give
+and by the libraries with the most extreme composition; a ratio is not, so the log scale can find a cluster
+that loses part of its cells where a difference of shares misses it. The tables also give
 ``log2fc_samples``, the mean difference of these log2 values; differences and means stay in share units.
 
 ``scale`` sets this: 'log', 'share', or None (the default), which means 'log' when the category is the
 cluster label (``compare_abundance``, or ``key='clusters'`` in ``compare_fates`` and ``shares_by_sample``)
-and 'share' for any other key; an explicit value always wins. Lineage labels keep the share scale because
-the log scale is unsafe for a category with no cells inside a selection whose size differs between
-conditions: its pseudo-counted log share then changes with the selection size alone. The log scale needs
-``stat='top'``, and ``standardise=True`` needs the share scale (for the cluster label, standardising by
-cluster gives every library the pooled composition, so there is nothing left to compare).
+and 'share' for any other key; an explicit value always wins. Only the entry named ``'clusters'`` counts as
+the cluster label: the name is compared, not the values, so for cluster labels stored under another name pass
+``scale='log'``. The log scale is unsafe for a category with no cells in some libraries when the libraries of
+the two conditions differ in size, for example after ``within=``: its pseudo-counted log share then changes
+with the library size alone. Such a call warns (median cells per library more than 20% apart between the
+conditions, and a tested category with no cells in some library); zeros against non-zeros with equal sizes are
+a real difference and stay silent. Lineage labels keep the share scale for this reason. The log scale needs
+``stat='top'``. With ``standardise=True`` the default scale is 'share'; an explicit ``scale='log'`` is rejected
+there, because standardising reweights shares and has no log-scale form (for the cluster label it would leave
+every library with the pooled composition).
