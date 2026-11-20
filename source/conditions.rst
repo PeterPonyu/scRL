@@ -59,10 +59,21 @@ Composition and shifts within cell states
 
 A difference in lineage shares between conditions is first of all a difference in which cell states are
 present: a condition with more cells in the clusters near one lineage has more cells whose heaviest lineage is
-that one.
-Read such a difference beside the cluster composition. ``standardise=True`` reweights each condition (or each
-sample) to one cluster composition and splits the difference into a composition part and a within-cluster
-part, which add up to it. To look for a shift within cell states, compare the uncommitted cells only
+that one. Read such a difference beside the cluster composition.
+
+``standardise=True`` works on the clusters that hold cells in every condition (or, with ``samples``, in every
+sample); the others are listed in ``table.attrs['dropped_clusters']``. On those clusters it gives each
+condition reweighted to their pooled composition (``difference_std``), the difference over their cells
+(``difference_kept``), and a split of that difference into a composition part and a within-cluster part,
+which add up to it exactly. With samples, a condition's composition is the mean of its samples' compositions,
+and its value within a cluster is the mean over its samples weighted by each sample's share of cells in that
+cluster (sum of w s over sum of w), not the plain mean of the samples' values; ``difference_kept`` is then
+the difference of the means over samples. When no cluster is dropped and the statistic has no missing values,
+``difference_kept`` equals ``difference`` (with samples, ``difference_samples``). A cluster whose statistic is
+missing for all of a unit's cells makes the standardised values and the parts NaN. Cells without a cluster
+label are an error.
+
+To look for a shift within cell states, compare the uncommitted cells only
 (``within=['...']``, a list of clusters or a mask) with the mean of the lineage shares (``stat='mean'`` and
 ``key='fate'``), which keeps the graded shares instead of counting heaviest lineages:
 

@@ -465,17 +465,83 @@ def test_composition_part_and_within_part():
     assert t.loc['yes', 'within_part'] == pytest.approx(t.loc['yes', 'difference'], abs=.01)
 
 
+def _check_parts(gres, samples, kept, stat='top', key='lineage'):
+    """The parts add up to the difference over the kept clusters, computed here on those clusters' cells alone."""
+    t = scRL.compare_fates(gres, 'A', 'B', key=key, stat=stat, samples=samples, standardise=True,
+                           n_permutations=10, n_boot=10)
+    alone = scRL.compare_fates(gres, 'A', 'B', key=key, stat=stat, samples=samples, within=kept,
+                               n_permutations=10, n_boot=10)
+    target = alone['difference' if samples is None else 'difference_samples'].reindex(t.index, fill_value=0.0)
+    np.testing.assert_allclose(t['composition_part'] + t['within_part'], t['difference_kept'], atol=1e-12)
+    np.testing.assert_allclose(t['difference_kept'], target, atol=1e-12)
+    return t
+
+
 def test_parts_add_up_and_missing_clusters_are_reported():
     gres, labels, conditions, samples = _samples_setup(True)
-    t = scRL.compare_fates(gres, 'A', 'B', key='lineage', standardise=True, n_permutations=10, n_boot=10)
-    np.testing.assert_allclose(t['composition_part'] + t['within_part'], t['difference'], atol=1e-12)
+    kept = ['branchA', 'root', 'trunk']
+    t = _check_parts(gres, None, kept)
     assert t.attrs['dropped_clusters'] == ['branchB']                     # no branchB cells in condition A
-    t = scRL.compare_fates(gres, 'A', 'B', key='lineage', samples=samples, standardise=True, n_permutations=10,
-                           n_boot=10)
-    np.testing.assert_allclose(t['composition_part'] + t['within_part'], t['difference_samples'], atol=1e-12)
+    assert abs(t.loc['branchB', 'difference_kept']) < 1e-12 and abs(t.loc['branchB', 'difference']) > .05
+    t = _check_parts(gres, samples, kept)
     assert 'pvalue_samples_std' in t.columns and t.attrs['dropped_clusters'] == ['branchB']
     per = scRL.shares_by_sample(gres, samples, key='lineage', standardise=True)
     assert 'stem_std' in per.columns and per.attrs['dropped_clusters'] == ['branchB']
+
+
+def test_parts_with_a_cluster_missing_from_one_sample():
+    gres, labels, conditions, samples = _samples_setup(False)
+    samples = samples.copy()
+    samples[(samples == 'A0') & (labels == 'branchB')] = 'A1'             # branchB absent from sample A0 only
+    t = _check_parts(gres, None, None)                                    # across cells nothing is dropped
+    assert t.attrs['dropped_clusters'] == []
+    np.testing.assert_allclose(t['difference_kept'], t['difference'], atol=1e-12)
+    t = _check_parts(gres, samples, ['branchA', 'root', 'trunk'])
+    assert t.attrs['dropped_clusters'] == ['branchB']
+    gres2, *_ = _with_shares()
+    gres2.embedding['fate_x'] = np.where(np.isnan(gres2.embedding['fate_x']), .5, gres2.embedding['fate_x'])
+    _check_parts(gres2, samples, ['branchA', 'root', 'trunk'], stat='mean', key='fate')
+
+
+def test_weighted_within_cluster_statistic_over_samples():
+    """A condition's within-cluster statistic is sum w s / sum w over its samples, not the plain mean."""
+    from scRL.ConditionCore import _composition, _kept_clusters
+    gres, labels, conditions, samples = _with_shares()
+    gres.embedding['fate_x'] = np.where(np.isnan(gres.embedding['fate_x']), .5, gres.embedding['fate_x'])
+    t = scRL.compare_fates(gres, 'A', 'B', key='fate', stat='mean', samples=samples, standardise=True,
+                           n_permutations=10, n_boot=10)
+    V = np.column_stack([gres.embedding['fate_x'], gres.embedding['fate_y']])
+    clusters = labels.astype(str)
+    units = {u: samples == u for u in sorted(set(samples.tolist()))}
+    kept, _ = _kept_clusters(clusters, units)
+    parts = _composition(V, clusters, units, kept)
+    def terms(c):
+        members = [u for u in units if u[0] == c]
+        w = np.mean([parts[u][0] for u in members], axis=0)
+        s = sum(parts[u][0][:, None] * parts[u][1] for u in members) / sum(parts[u][0] for u in members)[:, None]
+        return w, s
+    (w_a, s_a), (w_b, s_b) = terms('A'), terms('B')
+    np.testing.assert_allclose(t['within_part'], ((w_a + w_b) / 2) @ (s_a - s_b), atol=1e-12)
+    plain = {c: np.mean([parts[u][1] for u in units if u[0] == c], axis=0) for c in 'AB'}
+    assert np.abs(t['within_part'] - ((w_a + w_b) / 2) @ (plain['A'] - plain['B'])).max() > 1e-6
+
+
+def test_missing_cluster_labels_and_std_name_clash():
+    gres, labels, conditions, samples = _samples_setup(False)
+    clusters = pd.Series(pd.Categorical(labels))
+    clusters[0] = np.nan
+    gres.embedding['clusters'] = clusters
+    with pytest.raises(ValueError, match='no cluster label'):
+        scRL.compare_fates(gres, 'A', 'B', key='lineage', within=['root'])
+    with pytest.raises(ValueError, match='no cluster label'):
+        scRL.compare_fates(gres, 'A', 'B', key='lineage', standardise=True)
+    with pytest.raises(ValueError, match='no cluster label'):
+        scRL.shares_by_sample(gres, samples, key='lineage', standardise=True)
+    gres, labels, conditions, samples = _samples_setup(False)
+    gres.embedding['lineage'] = np.where(labels == 'root', 'stem_std', gres.embedding['lineage'])
+    scRL.shares_by_sample(gres, samples, key='lineage')                    # fine without standardise
+    with pytest.raises(ValueError, match='stem_std'):
+        scRL.shares_by_sample(gres, samples, key='lineage', standardise=True)
 
 
 def test_paired_test_across_blocks():

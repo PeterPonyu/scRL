@@ -167,7 +167,7 @@ scRL.compare_abundance(gres, test='knockout', reference='control')
 scRL.plot_conditions(gres)
 ```
 
-With several libraries per condition pass `samples=` (one library label per cell) to `compare_abundance` and `compare_fates`: the share of each library's cells per lineage (and, when clusters are projected, per cluster) is then compared across libraries, which is where a difference between conditions can be shown with a handful of libraries; `scRL.shares_by_sample` gives the per-library table. A difference in lineage shares is first of all a difference in which cell states are present: read it with `standardise=True` (the same difference after reweighting to one cluster composition, split into a composition part and a within-cluster part), look for shifts within cell states with `within=` and `stat='mean'`, and give `pairs=` when libraries form blocks.
+With several libraries per condition pass `samples=` (one library label per cell) to `compare_abundance` and `compare_fates`: the share of each library's cells per lineage (and, when clusters are projected, per cluster) is then compared across libraries, which is where a difference between conditions can be shown with a handful of libraries; `scRL.shares_by_sample` gives the per-library table. A difference in lineage shares is first of all a difference in which cell states are present: read it with `standardise=True` (on the clusters present in every library: the difference after reweighting to one cluster composition, and the difference split into a composition part and a within-cluster part), look for shifts within cell states with `within=` and `stat='mean'`, and give `pairs=` when libraries form blocks.
 
 ## Documentation
 
