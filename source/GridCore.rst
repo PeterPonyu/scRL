@@ -28,6 +28,9 @@ GridCore
     scRL.FateCore.fate_gate
     scRL.FateCore.fate_probabilities
     scRL.FateCore.fate_over_runs
+    scRL.CorridorCore.fate_corridors
+    scRL.CorridorCore.corridor_profile
+    scRL.CorridorCore.plot_corridors
     scRL.ConditionCore.project_conditions
     scRL.ConditionCore.compare_abundance
     scRL.ConditionCore.condition_grid

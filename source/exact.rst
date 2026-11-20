@@ -144,6 +144,32 @@ The means are written for the cells of the first run (``fate_runs_mean_<lineage>
 them. When the halves agree below about 0.8 for a lineage, add runs; when a lineage's end points are not on the
 start's part of the grid, its share from the start rests on a few stray points and should not be read.
 
+Fate corridors from a start region
+----------------------------------
+
+A multipotent state is a region of the grid, not a point, and a differentiation path is a corridor that holds many
+grid points, and cells, at each stage. ``scRL.fate_corridors`` starts the walk of ``fate_probabilities`` from a start
+region (one or more clusters, or any mask over the kept grid points; each point weighted by the cells nearest to it)
+and computes, exactly and without sampling, for every lineage the expected number of visits to each grid point by the
+walks that end in that lineage (its corridor), the fate potential of every grid point (the probability of each
+lineage, the limit of the walk shares) and its potency (the effective number of fates still open, from 1 to the
+number of lineages). In reinforcement-learning terms the fate potential is the value of the walk policy for a reward
+of 1 on reaching the lineage, and the corridor is that policy's state occupancy over the episodes that reach it.
+
+.. code-block:: python
+
+    scRL.fate_probabilities(gres, ends)                       # walk shares, as before
+    summary = scRL.fate_corridors(gres, ends, start='HSC_1')  # probability of each lineage from the start region
+    profile = scRL.corridor_profile(gres)                     # stage by stage along pseudotime
+    profile['pairs']        # how much of two corridors is shared, and where they part
+    profile['decisions']    # where each corridor crosses an even chance of its lineage
+    profile['tree']         # the order of the fate decisions (average linkage on 1 - overlap)
+    scRL.plot_corridors(gres)                                 # corridors in 2-D or 3-D, start region as rings
+
+Corridors of several lineages run together where they leave the start region and part where the fate is decided. A
+mask such as ``gres.grids['corridor_potency'] >= 2`` defines the multipotent region from the data instead of a
+cluster.
+
 Reachability
 ------------
 
