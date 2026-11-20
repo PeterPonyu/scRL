@@ -27,6 +27,7 @@ GridCore
     scRL.ExactCore.exact_values
     scRL.FateCore.fate_gate
     scRL.FateCore.fate_probabilities
+    scRL.FateCore.fate_over_runs
     scRL.ConditionCore.project_conditions
     scRL.ConditionCore.compare_abundance
     scRL.ConditionCore.condition_grid

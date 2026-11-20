@@ -7,7 +7,7 @@ from .Trajectory.Core import get_traj_df
 from .Trajectory.Results import traj_results
 from .utils import get_state_value
 from .ExactCore import exact_values, exact_trajectories
-from .FateCore import fate_gate, fate_probabilities
+from .FateCore import fate_gate, fate_probabilities, fate_over_runs
 from .EnvironmentNDCore import reachability
 from .ConditionCore import (project_conditions, compare_abundance, condition_grid, compare_values,
                             compare_fates, shares_by_sample)
@@ -27,7 +27,7 @@ __all__ = ['grids_from_embedding', 'align_pseudotime', 'project_cluster', 'proje
            , 'get_state_value', 'plot_grids', 'plot_slices', 'plot_views', 'plot_trend'
            , 'plot_clusters', 'plot_policy', 'plot_training'
            , 'plot_projections', 'plot_report', 'save_rotation', 'plot_style'
-           , 'exact_values', 'exact_trajectories', 'fate_gate', 'fate_probabilities', 'reachability'
+           , 'exact_values', 'exact_trajectories', 'fate_gate', 'fate_probabilities', 'fate_over_runs', 'reachability'
            , 'project_conditions', 'compare_abundance', 'condition_grid', 'compare_values', 'compare_fates', 'shares_by_sample'
            , 'plot_fates', 'plot_conditions', 'plot_mesh', 'plot_trajectories', 'plot_voxels'
            # Backward compatibility

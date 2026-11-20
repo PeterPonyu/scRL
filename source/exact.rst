@@ -119,6 +119,31 @@ of each lineage, so state both when reporting it. The results are stored like th
 ``compare_fates(..., key='fate_top')`` read them. For value maps of trained learners use the gate
 (``fate_gate``).
 
+Shares over embedding runs
+--------------------------
+
+A UMAP or t-SNE run is one random layout of the cells, and the grid over it is one of many. The walk shares of
+uncommitted cells can change between runs of the same cells, most for a lineage whose end clusters sit on a
+separate part of the grid, where no walk from the start arrives. ``scRL.fate_over_runs`` takes several grids of
+the same cells (for example one per UMAP seed, each after ``project_cluster`` and ``align_pseudotime``), computes
+the walk shares on each and averages every cell's shares over the runs::
+
+    runs = []
+    for seed in range(10):
+        Y = umap_3d(cells, seed)                     # any embedding of the same cells, in the same order
+        g = scRL.grids_from_embedding(Y)
+        scRL.project_cluster(g, clusters)
+        scRL.align_pseudotime(g, 'Stem', seed=0)
+        runs.append(g)
+    out = scRL.fate_over_runs(runs, {'Goblet': 'Goblet', 'Tuft': 'Tuft'}, start='Stem')
+    out['halves']        # agreement of the first and second half of the runs, uncommitted cells
+    out['reachable']     # per run: share of each lineage's end points on the start's part of the grid
+
+The means are written for the cells of the first run (``fate_runs_mean_<lineage>``, ``_top``, ``_entropy``), so
+``compare_fates(runs[0], test, reference, key='fate_runs_mean', stat='mean', samples=...)`` compares conditions on
+them. When the halves agree below about 0.8 for a lineage, add runs; when a lineage's end points are not on the
+start's part of the grid, its share from the start rests on a few stray points and should not be read.
+
 Reachability
 ------------
 

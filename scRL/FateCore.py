@@ -248,6 +248,144 @@ def fate_probabilities(gres, ends, forward=.25, steps=5000, policy=None, key_add
     return _store_shares(gres, H, names, key_add, min_reached)
 
 
+
+def fate_over_runs(runs, ends, start=None, forward=.25, steps=5000, key_add='fate_runs', min_reached=.5, within=None):
+    """
+    Walk shares of every cell averaged over several grids of the same cells, one grid per embedding run.
+
+    A UMAP or t-SNE run is one random layout of the cells, and the grid built over it is one of many. The walk
+    shares of uncommitted cells can change between runs of the same cells, most for a lineage whose end clusters
+    lie on a separate part of the grid, where no walk from the start arrives. Each grid of ``runs`` gets its walk
+    shares (``fate_probabilities``, stored in it under ``key_add``); a cell's share of a lineage is then the mean
+    over the runs whose grid has end points of that lineage. The agreement between the means of the first and the
+    second half of the runs says whether the runs are enough: when it is low for a lineage (below about 0.8), add
+    runs or read that lineage with care. It is taken over uncommitted cells by default, as cells inside an end
+    cluster agree trivially.
+
+    Parameters
+    ----------
+    runs
+        Grids results of the same cells in the same order (at least two), each after ``project_cluster`` and
+        ``align_pseudotime``; for example one per UMAP seed.
+    ends
+        Dict lineage name -> cluster name or list of cluster names, as in ``fate_probabilities``.
+    start
+        Start cluster. When given, the share of each lineage's end grid points that lie on a part of the grid holding
+        a start grid point is reported for each run; a lineage on a separate part cannot be reached from the start.
+        (Default: None)
+    forward, steps, min_reached
+        As in ``fate_probabilities``.
+        (Default: 0.25, 5000, 0.5)
+    key_add
+        Prefix of the walk shares stored in each run, and of the means stored for the cells of the first run:
+        ``<key_add>_mean_<name>``, ``<key_add>_mean_reached``, ``<key_add>_mean_top`` and
+        ``<key_add>_mean_entropy`` (cells only, as the runs have different grids), with a table
+        ``gres.grids['<key_add>_mean']`` that names the lineages and holds no grid values. So
+        ``compare_fates(runs[0], ..., key='<key_add>_mean', stat='mean')`` compares the means, and
+        ``key='<key_add>_mean_top'`` their heaviest lineage.
+        (Default: 'fate_runs')
+    within
+        Cells over which the halves are compared: a boolean mask over cells or a list of cluster names.
+        (Default: None, the cells outside every end cluster; all cells when the runs carry no cluster labels)
+
+    Returns
+    ----------
+    dict with 'mean' and 'sd' (DataFrames, cells x lineages: mean and standard deviation over the runs), 'runs'
+    (their number), 'halves' (Series: Spearman correlation over the ``within`` cells, per lineage, between the means
+    of the first and of the second half of the runs; NaN with fewer than four runs) and, with ``start``,
+    'reachable' (DataFrame, runs x lineages).
+    """
+    from scipy.sparse.csgraph import connected_components
+    from scipy.stats import spearmanr
+    from .GridNDCore import is_nd, lattice_from_scan
+    runs = list(runs)
+    if len(runs) < 2:
+        raise ValueError('fate_over_runs needs at least two grids of the same cells.')
+    if not isinstance(ends, dict) or len(ends) < 2:
+        raise ValueError('ends must be a dict of at least two lineages: name -> cluster name(s).')
+    names = [str(n) for n in ends]
+    _check_names(names)
+    lineage_clusters = {n: [c] if np.isscalar(c) else list(c) for n, c in zip(names, ends.values())}
+    n_cells = {len(g.embedding['embedding']) for g in runs}
+    if len(n_cells) != 1:
+        raise ValueError(f'The grids hold different numbers of cells ({sorted(n_cells)}); give runs of the same cells.')
+    labelled = [np.asarray(g.embedding['clusters']).astype(str) for g in runs if 'clusters' in g.embedding]
+    if any((x != labelled[0]).any() for x in labelled[1:]):
+        raise ValueError('The cells carry different cluster labels between runs; give runs of the same cells in '
+                         'the same order.')
+    N = n_cells.pop()
+    shares = np.full((len(runs), N, len(names)), np.nan)
+    reach = []
+    for r, g in enumerate(runs):
+        on_grid = set(np.asarray(g.grids['mapped_grids_clusters']).astype(str).tolist())
+        present = [n for n in names if on_grid & {str(c) for c in lineage_clusters[n]}]
+        if len(present) >= 2:
+            fate_probabilities(g, {n: lineage_clusters[n] for n in present}, forward=forward, steps=steps,
+                               key_add=key_add, min_reached=min_reached)
+            for n in present:
+                shares[r, :, names.index(n)] = np.asarray(g.embedding[f'{key_add}_{n}'], dtype=float)
+        else:
+            warnings.warn(f'Run {r}: fewer than two lineages have end points on its grid; it gives no shares.',
+                          UserWarning, stacklevel=2)
+        if start is not None:
+            lat = g if is_nd(g) else lattice_from_scan(g)
+            _, part = connected_components(lat.grids['mapped_adj'], directed=False)
+            labels = np.asarray(g.grids['mapped_grids_clusters']).astype(str)
+            if not (labels == str(start)).any():
+                raise ValueError(f'Run {r}: the start cluster {start!r} labels no grid point.')
+            start_parts = np.unique(part[labels == str(start)])
+            row = {}
+            for n in names:
+                end = np.isin(labels, [str(c) for c in lineage_clusters[n]])
+                row[n] = float(np.isin(part[end], start_parts).mean()) if end.any() else np.nan
+            reach.append(row)
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', RuntimeWarning)
+        mean = np.nanmean(shares, axis=0)
+        sd = np.nanstd(shares, axis=0)
+    if within is None:
+        ends_all = [str(c) for cs in lineage_clusters.values() for c in cs]
+        sel = ~np.isin(labelled[0], ends_all) if labelled else np.ones(N, bool)
+    elif isinstance(within, (str, list, tuple)):
+        if not labelled:
+            raise ValueError('within= by cluster names needs runs with cluster labels (project_cluster).')
+        sel = np.isin(labelled[0], [within] if isinstance(within, str) else [str(c) for c in within])
+    else:
+        sel = np.asarray(within)
+        if sel.dtype != bool or len(sel) != N:
+            raise ValueError(f'within must be None, cluster names, or a boolean mask over the {N} cells.')
+    halves = pd.Series(np.nan, index=names)
+    if len(runs) >= 4:
+        h = len(runs) // 2
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', RuntimeWarning)
+            first, second = np.nanmean(shares[:h], axis=0), np.nanmean(shares[h:], axis=0)
+        for i, n in enumerate(names):
+            ok = sel & np.isfinite(first[:, i]) & np.isfinite(second[:, i])
+            if ok.sum() > 2 and np.ptp(first[ok, i]) > 0 and np.ptp(second[ok, i]) > 0:
+                halves[n] = float(spearmanr(first[ok, i], second[ok, i]).statistic)
+    g0 = runs[0]
+    prefix = f'{key_add}_mean'
+    for i, n in enumerate(names):
+        g0.embedding[f'{prefix}_{n}'] = mean[:, i]
+    filled = np.where(np.isfinite(mean), mean, 0.0)
+    reached = filled.sum(1)
+    top = np.asarray(names, dtype=object)[filled.argmax(1)].astype(str).astype(object)
+    low = reached < min_reached
+    top[low] = 'none'
+    with np.errstate(divide='ignore', invalid='ignore'):
+        R = filled / reached[:, None]
+        entropy = -np.where(R > 0, R * np.log(R), 0).sum(1) / np.log(len(names))
+    entropy[low] = np.nan
+    g0.embedding[f'{prefix}_reached'], g0.embedding[f'{prefix}_top'] = reached, top
+    g0.embedding[f'{prefix}_entropy'] = entropy
+    g0.grids[prefix] = pd.DataFrame(columns=names)
+    out = {'mean': pd.DataFrame(mean, columns=names), 'sd': pd.DataFrame(sd, columns=names), 'runs': len(runs),
+           'halves': halves}
+    if start is not None:
+        out['reachable'] = pd.DataFrame(reach, columns=names)
+    return out
+
 def _store_shares(gres, H, names, key_add, min_reached):
     """Store lineage shares that need not sum to one, with the share of arriving walks, on the grid and cells."""
     from matplotlib.colors import to_hex
