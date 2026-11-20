@@ -126,7 +126,7 @@ def fate_gate(gres, keys, names=None, tau=.1, key_add='gate'):
     return _store_weights(gres, W, names, key_add)
 
 
-def fate_probabilities(gres, ends, forward=1.0, steps=1000, policy=None, key_add='fate', min_reached=.5):
+def fate_probabilities(gres, ends, forward=.25, steps=5000, policy=None, key_add='fate', min_reached=.5):
     """
     For every kept grid point, the share of walks starting there that enter the end points of each lineage
     first, within ``steps`` moves.
@@ -139,9 +139,15 @@ def fate_probabilities(gres, ends, forward=1.0, steps=1000, policy=None, key_add
     The shares are not renormalised: a grid point's shares sum to the share of its walks that arrive at any
     listed lineage within ``steps`` moves (stored as ``<key_add>_reached``). A region whose walks do not arrive,
     for example a tip that is not among the listed lineages, therefore gets low shares and ``'none'`` as
-    heaviest lineage. ``steps`` bounds the walk: an unbiased walk on a large grid may need more moves (look at
-    ``<key_add>_reached``). At early grid points the split among lineages depends on ``forward`` and on which
+    heaviest lineage. At early grid points the split among lineages depends on ``forward`` and on which
     clusters are given as the ends of each lineage.
+
+    The default is a mild bias (``forward=0.25``) with a large move budget (``steps=5000``). A mild bias lets
+    a walk explore the neighbouring branches before it commits, so weak fate signals at early grid points are
+    kept. With ``forward=1`` the walk commits to the nearest later region, and early grid points then show
+    little of the other lineages. A milder bias needs more moves to arrive, hence the larger budget; check
+    ``<key_add>_reached`` (on a large grid, or with ``forward=0``, more moves may be needed). These defaults
+    were chosen on simulated data with known fate probabilities, where the stronger bias lost weak signals.
 
     Parameters
     ----------
@@ -151,11 +157,12 @@ def fate_probabilities(gres, ends, forward=1.0, steps=1000, policy=None, key_add
         Dict lineage name -> cluster name or list of cluster names (at least two lineages; a cluster belongs to
         one lineage only).
     forward
-        Bias of the walk toward later pseudotime.
-        (Default: 1.0)
+        Bias of the walk toward later pseudotime; 0 is the unbiased walk. Small values keep weak fate signals
+        at early grid points; values of 1 and above make the walk commit to the nearest later region.
+        (Default: 0.25)
     steps
-        Number of moves within which a walk must arrive.
-        (Default: 1000)
+        Number of moves within which a walk must arrive; a milder bias needs more moves.
+        (Default: 5000)
     policy
         Move probabilities instead of the walk: an array (kept grid points x moves; finite and not negative;
         rows need not be normalised, moves off the grid are ignored, a row of zeros means the walk stops

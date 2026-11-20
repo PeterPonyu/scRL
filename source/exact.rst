@@ -15,7 +15,7 @@ exactly instead of being learned. One exact solution per lineage, combined by a 
     scRL.fate_gate(gres, ['exact_0', 'exact_3'], names=['lineage 0', 'lineage 3'])
     scRL.plot_fates(gres)
     scRL.plot_slices(gres, key='exact_3', policy=gres.grids['exact_3_best'])
-    scRL.fate_probabilities(gres, {'lineage 0': '0', 'lineage 3': '3'}, forward=1)
+    scRL.fate_probabilities(gres, {'lineage 0': '0', 'lineage 3': '3'})
     scRL.plot_fates(gres, key_add='fate')
 
 Exact solution
@@ -34,11 +34,15 @@ pseudotime, and with it the rewards, depends on the draw. Give it ``seed`` (for 
 pseudotime reproducible without touching numpy's global generator. Once pseudotime is fixed, the exact
 solution, the lineage gate and the lineage shares are deterministic.
 
-One rule of the learners is relaxed: returning to a grid point does not end the episode. Inside a rewarded
-region the best path may therefore go back and forth between neighbouring rewarded points, and the value there
-approaches reward / (1 - gamma). Read the value of a grid point as the discounted distance to the best-paying
-part of the lineage: its entry with 'Decision' rewards, its far end with 'Contribution' rewards. It is not the
-amount of rewarded territory.
+One rule of the learners is relaxed: returning to a grid point does not end the episode. The exact solution
+is therefore that of a relaxed problem. Its values are an upper bound on what a policy can collect under the
+rules the learners are trained with, and a reference for the shape of the value landscape, not a return that
+a policy reaches. Inside a rewarded region the best relaxed path may go back and forth between neighbouring
+rewarded points, and the value there approaches reward / (1 - gamma). A greedy policy read from the exact
+solution and run under the training rules reaches the lineage and then ends by revisiting a point, so its
+own return is well below the exact value. Read the value of a grid point as the discounted distance to the
+best-paying part of the lineage: its entry with 'Decision' rewards, its far end with 'Contribution' rewards.
+It is not the amount of rewarded territory.
 
 Lineage gate
 ------------
@@ -60,8 +64,12 @@ Lineage shares
 --------------
 
 ``scRL.fate_probabilities`` gives, for every grid point, the share of walks starting there that enter the end
-points of each lineage first within ``steps`` moves (1,000 by default). ``forward`` biases the walk toward
-later pseudotime (0 is the unbiased walk, which on a large grid may need more moves). The shares are not
+points of each lineage first within ``steps`` moves. ``forward`` biases the walk toward later pseudotime (0
+is the unbiased walk). The default is a mild bias, ``forward=0.25``, with 5,000 moves: the walk explores the
+neighbouring branches before it commits, so weak fate signals at early grid points are kept, while with
+``forward=1`` it commits to the nearest later region. A milder bias needs more moves to arrive, hence the
+larger budget; on a large grid look at ``fate_reached`` to see whether more are needed. The defaults were
+chosen on simulated data with known fate probabilities. The shares are not
 renormalised: they sum to the share of walks that arrive at any listed lineage (``fate_reached``), so a region
 whose walks do not arrive, for example a tip that is not among the listed lineages, shows up as 'none'. At
 early grid points the split among lineages depends on ``forward`` and on which clusters are given as the ends

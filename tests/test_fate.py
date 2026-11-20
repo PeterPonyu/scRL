@@ -190,6 +190,23 @@ def test_shares_gamblers_ruin_and_short_walks():
     assert (reached[distance > 3] == 0).all() and (reached[distance <= 3] > 0).all()
 
 
+def test_walk_defaults():
+    import inspect
+    params = inspect.signature(scRL.fate_probabilities).parameters
+    assert params['forward'].default == .25 and params['steps'].default == 5000
+
+
+def test_default_walk_differs_from_the_strong_bias():
+    gres = _gres()
+    mild = scRL.fate_probabilities(gres, ENDS, key_add='mild')
+    strong = scRL.fate_probabilities(gres, ENDS, forward=1, steps=5000, key_add='strong')
+    np.testing.assert_allclose(gres.grids['mild_reached'], mild.to_numpy().sum(1), rtol=0, atol=1e-12)
+    np.testing.assert_allclose(gres.grids['strong_reached'], strong.to_numpy().sum(1), rtol=0, atol=1e-12)
+    assert np.abs(mild.to_numpy() - strong.to_numpy()).max() > .01
+    same = scRL.fate_probabilities(gres, ENDS, forward=.25, steps=5000, key_add='same')
+    np.testing.assert_array_equal(same.to_numpy(), mild.to_numpy())
+
+
 def test_shares_grow_with_steps():
     gres = _gres()
     few = scRL.fate_probabilities(gres, ENDS, steps=200, key_add='few')
@@ -197,7 +214,7 @@ def test_shares_grow_with_steps():
     assert (few.to_numpy() <= many.to_numpy() + 1e-12).all()
 
 
-@pytest.mark.parametrize('forward', [0, 1, 5, 20, 80, 200])
+@pytest.mark.parametrize('forward', [0, .25, 1, 5, 20, 80, 200])
 def test_shares_stay_valid_at_any_bias(forward):
     gres = _gres()
     shares = scRL.fate_probabilities(gres, ENDS, forward=forward)

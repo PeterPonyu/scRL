@@ -7,10 +7,10 @@
   "rewarded_points": 720,
   "reachable_rewarded_points": 698,
   "grid_points_per_heaviest_lineage_walk": {
-   "erythroid": 2184,
-   "monocyte": 1536,
-   "neutrophil": 406,
-   "none": 242
+   "erythroid": 2138,
+   "monocyte": 1671,
+   "neutrophil": 445,
+   "none": 114
   },
   "grid_points_per_heaviest_lineage_gate": {
    "erythroid": 1957,
@@ -47,26 +47,26 @@
   "gene_reward_mean": 15.706388595066992
  },
  "shares": {
-  "mean_erythroid": 0.4899788193291644,
-  "mean_monocyte": 0.3601493179593765,
-  "mean_neutrophil": 0.09471223189991852
+  "mean_erythroid": 0.4833033296776036,
+  "mean_monocyte": 0.3861100464930154,
+  "mean_neutrophil": 0.11062919344812185
  },
  "comparison": {
-  "reference_erythroid": 0.44803370786516855,
-  "test_erythroid": 0.4992343032159265,
-  "difference_erythroid": 0.05120059535075794,
-  "pvalue_erythroid": 0.011494252873563218,
-  "reference_monocyte": 0.40730337078651685,
-  "test_monocyte": 0.4464012251148545,
-  "difference_monocyte": 0.03909785432833768,
-  "pvalue_monocyte": 0.043478260869565216,
-  "reference_neutrophil": 0.11867977528089887,
-  "test_neutrophil": 0.03751914241960184,
-  "difference_neutrophil": -0.08116063286129704,
+  "reference_erythroid": 0.44241573033707865,
+  "test_erythroid": 0.4908116385911179,
+  "difference_erythroid": 0.04839590825403928,
+  "pvalue_erythroid": 0.018490754622688656,
+  "reference_monocyte": 0.4199438202247191,
+  "test_monocyte": 0.4548238897396631,
+  "difference_monocyte": 0.03488006951494399,
+  "pvalue_monocyte": 0.08095952023988005,
+  "reference_neutrophil": 0.12359550561797752,
+  "test_neutrophil": 0.04670750382848392,
+  "difference_neutrophil": -0.0768880017894936,
   "pvalue_neutrophil": 0.0004997501249375312,
-  "reference_none": 0.02598314606741573,
-  "test_none": 0.016845329249617153,
-  "difference_none": -0.009137816817798579,
-  "pvalue_none": 0.10594702648675662
+  "reference_none": 0.014044943820224719,
+  "test_none": 0.007656967840735069,
+  "difference_none": -0.00638797597948965,
+  "pvalue_none": 0.1409295352323838
  }
 }
