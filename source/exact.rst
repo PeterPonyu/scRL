@@ -72,12 +72,13 @@ no random seed is involved.
 
 The walk is the greedy reading of the relaxed solution with returns ruled out, not the optimum of the
 training problem. It is the reading to use for a lineage whose end cluster lies far from the start cluster:
-trained learners rarely reach such a lineage, while these walks reach it whenever a path without returns
-leads there. With rewards that are never negative, no walk collects more than the exact value at its start
-point (the share of that bound is reported per walk); with gene rewards that include ``punish_keys`` a
-warning says that the bound does not hold. Each row gives the grid points visited, how the walk ended (stop
+trained learners often fail to reach such a lineage, while these walks reach it whenever a path without returns
+leads there. With rewards that are never negative, no walk from the start cluster (or from any grid point that is
+not a stop point) collects more than the exact value at its start point, and the share of that bound is reported
+per walk; with gene rewards that include ``punish_keys``, or with stop points given as starts, a warning says that
+the bound does not hold. Each row gives the grid points visited, how the walk ended (stop
 point, step cap, trapped, left the grid, or, with ``until_entry``, entered), whether and at which move it
-first entered the lineage's end cluster (for a gene reward: a grid point whose entry pays a positive
+first entered the lineage's end cluster by a move (for a gene reward: a grid point whose entry pays a positive
 reward), and the discounted return. The paths and their mean path are stored where ``get_traj_df`` stores
 the rollouts of a trained learner, so ``traj_results`` draws them in 2-D and 3-D. The simulator figures need
 a trained learner and do not take these walks.

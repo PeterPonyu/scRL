@@ -167,6 +167,8 @@ def _start_positions(gres, mapped, starts, seed):
             raise ValueError('The reward has no start cluster: pass start grid points with `starts`, or a number of '
                              'start points to draw.')
         return on_cluster
+    if isinstance(starts, (bool, np.bool_)) or (np.isscalar(starts) and not isinstance(starts, (int, np.integer))):
+        raise TypeError('`starts` must be None, a whole number of start points to draw, or grid point indices.')
     if np.isscalar(starts):
         k = int(starts)
         if k < 1:
@@ -204,18 +206,20 @@ def exact_trajectories(gres, key=None, starts=None, seed=None, until_entry=False
     by ``gamma``; at most ``max_step + 1`` moves are made. When every kept neighbour has been visited, the walk
     ends where it is ('trapped') instead of returning to a visited point; a move off the grid (-2) is made only
     from a grid point without kept neighbours. Each start point gives one walk; the result depends on no
-    random seed (``seed`` only draws start points when ``starts`` is a number).
+    random seed (``seed`` is used only to draw start points when ``starts`` is a number).
 
     The walk is the greedy reading of the relaxed solution with returns ruled out, not the optimum of the
     training problem (in which a return to a visited point ends the episode). The greedy policy of the
     best-move table itself goes back and forth between neighbouring rewarded points and, under the training
     rules, ends by a return. Prefer these walks to a trained learner's rollouts for a lineage whose end cluster
-    lies far from the start cluster: trained learners rarely reach such a lineage, these walks do whenever a
-    path without returns exists. When the rewards are never negative, no walk collects more than the exact
+    lies far from the start cluster: trained learners often fail to reach such a lineage, these walks reach it
+    whenever a path without returns leads there. When the rewards are never negative, no walk that starts on a
+    grid point other than a stop point (the start cluster's points never are) collects more than the exact
     value at its start point, which bounds every return under the training rules; the share of that bound is
-    reported per walk. Rewards from ``c_rewards`` with ``punish_keys`` can be negative; the walks are made the
-    same way, but the exact value is then not a bound (a warning says so and ``bound`` is False in the
-    summary).
+    reported per walk. Rewards from ``c_rewards`` with ``punish_keys`` can be negative, and walks given a stop
+    point as start can end with a negative pseudotime increment that the bound does not cover; the walks are
+    made the same way, but a warning says that the exact value is not a bound and ``bound_holds`` is False in
+    the summary.
 
     Parameters
     ----------
@@ -245,13 +249,14 @@ def exact_trajectories(gres, key=None, starts=None, seed=None, until_entry=False
     DataFrame, one row per walk: ``start`` (grid point), ``path`` (the grid points visited, start included),
     ``moves`` (moves made), ``end`` ('stop point', 'step cap', 'trapped', 'left the grid' or, with
     ``until_entry``, 'entered'), ``entered`` (whether a move entered the target: the end cluster of a lineage
-    reward, or a grid point whose entry pays a positive reward for a gene reward), ``entry_move`` (move of the
-    first entry), ``return`` (discounted), ``bound`` (exact value at the start point) and ``bound_share``
+    reward, or a grid point whose entry pays a positive reward for a gene reward; a start point inside the
+    target does not count by itself), ``entry_move`` (move of the first entry), ``return`` (discounted),
+    ``bound`` (exact value at the start point) and ``bound_share``
     (return / bound where the bound is positive). Stored: ``gres.trajectory['<key_add>_idx']`` (the paths) and
     ``'<key_add>_traj'`` (their mean path by pseudotime, as ``get_traj_df`` makes it), so ``traj_results(gres,
     clusters, '<key_add>')`` draws them in 2-D and 3-D; ``gres.trajectory['<key_add>_summary']`` (share of walks
     that enter the target, median moves, median moves to the entry, median share of the bound, counts of the
-    ends, whether the bound holds, the settings); and ``gres.grids['<key_add>_visits']``, the number of walks
+    ends, ``bound_holds``, the settings); and ``gres.grids['<key_add>_visits']``, the number of walks
     through each kept grid point.
     """
     from .Trajectory.Core import _mean_path_points
@@ -279,11 +284,15 @@ def exact_trajectories(gres, key=None, starts=None, seed=None, until_entry=False
     else:
         target = np.zeros(len(mapped), bool)
         target[nb[valid & (R > 0)]] = True
-    bound_holds = bool((R[valid] >= 0).all())
-    if not bound_holds:
+    S = _start_positions(gres, mapped, starts, seed)
+    negative, on_stop = bool((R[valid] < 0).any()), int(stop[S].sum())
+    bound_holds = not negative and not on_stop
+    if negative:
         warnings.warn(f'The reward of {key!r} has negative values, so the exact value is not an upper bound on a '
                       f'return here; bound_share can exceed 1.', UserWarning)
-    S = _start_positions(gres, mapped, starts, seed)
+    elif on_stop:
+        warnings.warn(f'{on_stop} start point(s) are stop points (boundary points outside the start cluster); for '
+                      f'walks from them the exact value is not an upper bound on the return.', UserWarning)
     path, moves, end, entry, G = _walk(nb, R, stop, t, Q, target, S, settings['gamma'], settings['max_step'],
                                        until_entry)
     paths = [mapped[row[row >= 0]] for row in path]
@@ -307,5 +316,5 @@ def exact_trajectories(gres, key=None, starts=None, seed=None, until_entry=False
         'entry_move_median': float(np.median(entry[entered])) if entered.any() else float('nan'),
         'bound_share_median': float(np.nanmedian(share)) if np.isfinite(share).any() else float('nan'),
         'ends': {e: int((walks['end'] == e).sum()) for e in WALK_ENDS if (walks['end'] == e).any()},
-        'bound': bound_holds, 'key': key, 'settings': dict(settings), 'until_entry': bool(until_entry)}
+        'bound_holds': bound_holds, 'key': key, 'settings': dict(settings), 'until_entry': bool(until_entry)}
     return walks

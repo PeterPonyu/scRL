@@ -209,7 +209,7 @@ def test_trajectories_reach_the_branch_on_the_tree(scan2d):
     for gres in (_small(), scan2d):
         walks = _tree_walks(gres)
         s = gres.trajectory['exact_branchA_walks_summary']
-        assert walks['entered'].all() and s['entered'] == 1.0 and s['bound']
+        assert walks['entered'].all() and s['entered'] == 1.0 and s['bound_holds']
         ends = set(gres.grids['ends_cluster_grids'])
         for p, k in zip(walks['path'], walks['entry_move']):
             assert p[k] in ends and not ends.intersection(p[1:k])                  # first entry at entry_move
@@ -259,6 +259,12 @@ def test_trajectories_starts_and_seed():
         scRL.exact_trajectories(gres, starts=0)
     with pytest.raises(ValueError, match='only'):
         scRL.exact_trajectories(gres, starts=10 ** 6)
+    for bad in (2.5, True):
+        with pytest.raises(TypeError, match='whole number'):
+            scRL.exact_trajectories(gres, starts=bad)
+    none = scRL.exact_trajectories(gres, starts=[], key_add='none')
+    assert len(none) == 0 and gres.trajectory['none_summary']['walks'] == 0
+    assert gres.trajectory['none_traj'].shape == (0, 3)
 
 
 def test_trajectories_errors():
@@ -299,12 +305,12 @@ def test_trajectories_with_gene_rewards(scan2d):
         warnings.simplefilter('error')
         walks = scRL.exact_trajectories(scan2d)
     s = scan2d.trajectory['exact_geneA_walks_summary']
-    assert s['bound'] and (walks['return'] <= walks['bound'] + 1e-9).all() and walks['entered'].mean() > .5
+    assert s['bound_holds'] and (walks['return'] <= walks['bound'] + 1e-9).all() and walks['entered'].mean() > .5
     scRL.c_rewards(scan2d, reward_keys=['geneA'], starts=['root'], punish_keys=['geneB'])
     scRL.exact_values(scan2d, reward_type='c')
     with pytest.warns(UserWarning, match='not an upper bound'):
         scRL.exact_trajectories(scan2d)
-    assert not scan2d.trajectory['exact_geneA_walks_summary']['bound']
+    assert not scan2d.trajectory['exact_geneA_walks_summary']['bound_holds']
 
 
 def test_trajectories_until_entry_and_trajectory_views(scan2d):
@@ -325,3 +331,91 @@ def test_trajectories_until_entry_and_trajectory_views(scan2d):
             scRL.traj_results(gres, clusters, 'to_branch', points=points)
             assert plt.gcf().axes
         plt.close('all')
+
+
+def _random_graph(rng):
+    """A small undirected graph in the shape of a move table, with non-negative rewards, random stop points and a
+    pseudotime that can fall along a move."""
+    M, A = int(rng.integers(2, 16)), 6
+    nb = -np.ones((M, A), int)
+    for _ in range(int(rng.integers(0, 2 * M))):
+        a, b = rng.integers(0, M, 2)
+        if a != b and (nb[a] < 0).any() and (nb[b] < 0).any() and b not in nb[a]:
+            nb[a, np.flatnonzero(nb[a] < 0)[0]] = b
+            nb[b, np.flatnonzero(nb[b] < 0)[0]] = a
+    R = rng.random((M, A)) * rng.integers(0, 2, (M, A))
+    stop = (nb < 0).any(1) & (rng.random(M) < .7) | (rng.random(M) < .1)
+    t = rng.normal(size=M) * rng.choice([0, 1, 3])
+    return nb, R, stop, t
+
+
+def _replay(nb, R, stop, t, Q, target, s, gamma, max_step, until_entry):
+    """The walk replayed move by move from the environment's rules, choosing by the move values Q."""
+    path, G, disc, entry, p = [s], 0.0, 1.0, -1, s
+    for k in range(max_step + 1):
+        kept = [a for a in range(nb.shape[1]) if nb[p, a] >= 0]
+        free = [a for a in kept if nb[p, a] not in path]
+        if not kept:
+            return path, G - 2.0 * disc, 'left the grid', entry
+        if not free:
+            return path, G, 'trapped', entry
+        a = next(a for a in free if Q[p, a] >= max(Q[p, b] for b in free) - 1e-9)
+        q = nb[p, a]
+        path.append(q)
+        if target[q] and entry < 0:
+            entry = k + 1
+        if stop[q]:
+            return path, G + disc * (R[p, a] + t[q] - t[p]), 'stop point', entry
+        G += disc * R[p, a]
+        disc *= gamma
+        p = q
+        if until_entry and entry == k + 1:
+            return path, G, 'entered', entry
+    return path, G, 'step cap', entry
+
+
+def test_walk_matches_a_replay_and_the_bound_on_random_graphs():
+    from scRL.ExactCore import _solve, _walk, WALK_ENDS
+    rng = np.random.default_rng(2)
+    walks = excess = 0
+    for _ in range(300):
+        nb, R, stop, t = _random_graph(rng)
+        gamma, max_step = float(rng.choice([.5, .9, .99])), int(rng.choice([0, 1, 2, 5, 20]))
+        target = rng.random(len(nb)) < .3
+        until_entry = bool(rng.random() < .5)
+        Q, V = _solve(nb, R, stop, t, gamma, max_step)
+        S = np.arange(len(nb))
+        path, moves, end, entry, G = _walk(nb, R, stop, t, Q, target, S, gamma, max_step, until_entry)
+        for s in S:
+            p, g, e, k = _replay(nb, R, stop, t, Q, target, s, gamma, max_step, until_entry)
+            assert path[s][path[s] >= 0].tolist() == p and WALK_ENDS[end[s]] == e and entry[s] == k
+            assert G[s] == pytest.approx(g, abs=1e-12)
+            if not stop[s]:                                  # the bound holds for walks not started on a stop point
+                excess = max(excess, G[s] - V[s])
+            walks += 1
+    assert walks > 2000 and excess <= 1e-9
+
+
+def test_bound_flag_for_starts_on_stop_points():
+    gres = _small()
+    walks = _tree_walks(gres)
+    assert gres.trajectory['exact_branchA_walks_summary']['bound_holds']
+    from scRL.EnvironmentNDCore import _stop_mask
+    stop = _stop_mask(gres, gres.grids['starts_cluster_grids'])
+    on_stop = np.asarray(gres.grids['mapped_grids'])[stop][:3]
+    with pytest.warns(UserWarning, match='stop points'):
+        scRL.exact_trajectories(gres, starts=on_stop, key_add='edge')
+    assert not gres.trajectory['edge_summary']['bound_holds']
+
+
+def test_trajectories_from_start_probabilities(scan2d):
+    scRL.c_rewards(scan2d, reward_keys=['geneA'], starts_keys=['geneRoot'])    # no start cluster
+    scRL.exact_values(scan2d, reward_type='c')
+    with pytest.raises(ValueError, match='no start cluster'):
+        scRL.exact_trajectories(scan2d)
+    a = scRL.exact_trajectories(scan2d, starts=6, seed=4, key_add='a')
+    b = scRL.exact_trajectories(scan2d, starts=6, seed=4, key_add='b')
+    assert a['start'].tolist() == b['start'].tolist() and a['start'].is_unique
+    probs = np.asarray(scan2d.grids['starts_probs'])
+    position = pd.Index(scan2d.grids['mapped_grids']).get_indexer(a['start'])
+    assert (probs[position] > 0).all()
