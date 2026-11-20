@@ -290,7 +290,7 @@ def exact_trajectories(gres, key=None, starts=None, seed=None, until_entry=False
     if negative:
         warnings.warn(f'The reward of {key!r} has negative values, so the exact value is not an upper bound on a '
                       f'return here; bound_share can exceed 1.', UserWarning)
-    elif on_stop:
+    if on_stop:
         warnings.warn(f'{on_stop} start point(s) are stop points (boundary points outside the start cluster); for '
                       f'walks from them the exact value is not an upper bound on the return.', UserWarning)
     path, moves, end, entry, G = _walk(nb, R, stop, t, Q, target, S, settings['gamma'], settings['max_step'],
