@@ -24,8 +24,9 @@ Exact solution
 ``scRL.exact_values`` computes, for every kept grid point, the best discounted return under the rules of the
 learners (a move off the grid costs -2 and ends the episode, a step onto the boundary outside the start
 cluster ends it, at most ``max_step + 1`` moves) by backward induction over the moves. The solver has no
-random element and takes well under a second. It stores the values as ``gres.grids['exact_<reward key>']``
-and the best move from every grid point as ``gres.grids['exact_<reward key>_move']``. On a regular lattice
+random element and takes well under a second. It stores the values as ``gres.grids['exact_<reward key>']``,
+the best move from every grid point as ``gres.grids['exact_<reward key>_move']`` and its settings as
+``gres.grids['exact_<reward key>_settings']``. On a regular lattice
 several moves are often equally good; ``gres.grids['exact_<reward key>_best']`` marks all of them, and
 ``plot_policy`` and ``plot_slices(policy=...)`` draw their mean, which is the reading to use.
 
@@ -47,6 +48,39 @@ greedy policy read from the exact solution and run under the deep environment's 
 and then ends by revisiting a point, so its return is lower than the exact value. Read the value of a grid
 point as the discounted distance to the best-paying part of the lineage: its entry with 'Decision' rewards,
 its far end with 'Contribution' rewards. It is not the amount of rewarded territory.
+
+Trajectories from the exact solution
+------------------------------------
+
+``scRL.exact_trajectories`` gives trajectories for a lineage without training. From each start point (by
+default every grid point of the start cluster) the walk takes, at every move, the move of largest exact move
+value among the moves into grid points it has not visited yet; equally good moves go to the first one, as in
+the best-move table. It follows the rules the values were solved with (stop points, ``gamma``, at most
+``max_step + 1`` moves; the settings are read from what ``exact_values`` stored). When every neighbour has
+been visited the walk ends where it is ('trapped') instead of returning. Each start point gives one walk, and
+no random seed is involved.
+
+.. code-block:: python
+
+    scRL.d_rewards(gres, starts=['4'], ends=['3'])
+    scRL.exact_values(gres)                           # gres.grids['exact_3']
+    walks = scRL.exact_trajectories(gres)             # one row per walk
+    gres.trajectory['exact_3_walks_summary']          # share entering the lineage, moves, share of the bound
+    scRL.exact_trajectories(gres, until_entry=True, key_add='to_3')
+    scRL.traj_results(gres, ['4', '3'], 'to_3')       # 2-D or 3-D view of the mean path
+    scRL.plot_grids(gres, key='to_3_visits')          # how many walks pass each grid point
+
+The walk is the greedy reading of the relaxed solution with returns ruled out, not the optimum of the
+training problem. It is the reading to use for a lineage whose end cluster lies far from the start cluster:
+trained learners rarely reach such a lineage, while these walks reach it whenever a path without returns
+leads there. With rewards that are never negative, no walk collects more than the exact value at its start
+point (the share of that bound is reported per walk); with gene rewards that include ``punish_keys`` a
+warning says that the bound does not hold. Each row gives the grid points visited, how the walk ended (stop
+point, step cap, trapped, left the grid, or, with ``until_entry``, entered), whether and at which move it
+first entered the lineage's end cluster (for a gene reward: a grid point whose entry pays a positive
+reward), and the discounted return. The paths and their mean path are stored where ``get_traj_df`` stores
+the rollouts of a trained learner, so ``traj_results`` draws them in 2-D and 3-D. The simulator figures need
+a trained learner and do not take these walks.
 
 Lineage gate
 ------------

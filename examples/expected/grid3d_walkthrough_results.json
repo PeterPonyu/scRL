@@ -25,7 +25,10 @@
    "depleted": 32,
    "no difference": 1929,
    "too few cells": 2407
-  }
+  },
+  "neutrophil_walks_from_7MEP": 178,
+  "neutrophil_walks_entering": 178,
+  "neutrophil_first_walk_moves": 51
  },
  "exact": {
   "decision_min": -0.02450980392156865,
@@ -44,7 +47,8 @@
    "25377": 0.02450980392156865
   },
   "contribution_mean": 2.1079950981915068,
-  "gene_reward_mean": 15.706388595066992
+  "gene_reward_mean": 15.706388595066992,
+  "neutrophil_walk_bound_share_median": 0.7722983621821957
  },
  "shares": {
   "mean_erythroid": 0.4833033296776036,

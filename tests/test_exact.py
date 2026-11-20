@@ -137,3 +137,191 @@ def test_one_step_model_equals_the_nd_environment():
     gres = _small()
     env = deepEnvND(gres, make_tree(d=3)[2], KNN=10, reward_type='d', reward_mode='Decision', starts_probs=False)
     _check_environment(gres, env, 'd_Decision_rewards')
+
+
+# ---------------------------------------------------------------- trajectories from the exact solution
+def _tree_walks(gres, **kw):
+    scRL.d_rewards(gres, starts=['root'], ends=['branchA'])
+    scRL.exact_values(gres)
+    return scRL.exact_trajectories(gres, **kw)
+
+
+def _environment(gres, reward_type='d', reward_mode='Decision'):
+    from scRL.GridNDCore import is_nd
+    lattice = gres if is_nd(gres) else lattice_from_scan(gres)
+    nb = np.asarray(lattice.grids['neighbors'])
+    R = gres.qlearning[f'{reward_type}_{reward_mode}_rewards'].to_numpy(dtype=float)
+    stop = _stop_mask(lattice, lattice.grids.get('starts_cluster_grids'))
+    t = gres.grids['pseudotime'].loc[gres.grids['mapped_grids']].to_numpy(dtype=float)
+    return nb, R, stop, t
+
+
+def _loop_walks(nb, R, stop, t, starts, gamma=.9, max_step=50):
+    """Independent plain-loop version: backward induction, then the greedy walk without returns."""
+    M, A = len(nb), len(nb[0])
+    V = [0.0] * M
+    for _ in range(max_step + 1):
+        Q = [[(-2.0 if nb[p][a] < 0 else R[p][a] + t[nb[p][a]] - t[p] if stop[nb[p][a]]
+               else R[p][a] + gamma * V[nb[p][a]]) for a in range(A)] for p in range(M)]
+        V = [max(row) for row in Q]
+    out = []
+    for s in starts:
+        path, p, G, disc = [s], s, 0.0, 1.0
+        for _ in range(max_step + 1):
+            options = [a for a in range(A) if nb[p][a] >= 0 and nb[p][a] not in path]
+            if not options:
+                if all(nb[p][a] < 0 for a in range(A)):
+                    G -= 2.0 * disc
+                break
+            best = max(Q[p][a] for a in options)
+            a = next(a for a in options if Q[p][a] >= best - 1e-9)
+            q = nb[p][a]
+            path.append(q)
+            if stop[q]:
+                G += disc * (R[p][a] + t[q] - t[p])
+                break
+            G += disc * R[p][a]
+            disc *= gamma
+            p = q
+        out.append((path, G))
+    return out
+
+
+def test_trajectories_never_return_and_stay_under_the_bound(scan2d):
+    for gres in (_small(), scan2d):
+        walks = _tree_walks(gres)
+        assert len(walks) == len(gres.grids['starts_cluster_grids'])
+        assert all(len(p) == len(set(p)) for p in walks['path'])                    # no grid point twice
+        assert (walks['return'] <= walks['bound'] + 1e-9).all()                     # the relaxed bound
+        assert (walks['moves'] <= 51).all() and set(walks['end']) <= {'stop point', 'step cap', 'trapped'}
+        nb = _environment(gres)[0]
+        mapped = np.asarray(gres.grids['mapped_grids'])
+        pos = pd.Index(mapped)
+        for p in walks['path']:                                                    # every move is along the table
+            i = pos.get_indexer(p)
+            assert all(j in nb[a] for a, j in zip(i[:-1], i[1:]))
+
+
+def test_trajectories_reach_the_branch_on_the_tree(scan2d):
+    # Every walk from the root enters branchA (share 1.0): on both tree grids the branch can be entered from the
+    # root within the step cap, and the relaxed values rise along the trunk toward it, so the greedy walk
+    # never runs out of unvisited points on the way.
+    for gres in (_small(), scan2d):
+        walks = _tree_walks(gres)
+        s = gres.trajectory['exact_branchA_walks_summary']
+        assert walks['entered'].all() and s['entered'] == 1.0 and s['bound']
+        ends = set(gres.grids['ends_cluster_grids'])
+        for p, k in zip(walks['path'], walks['entry_move']):
+            assert p[k] in ends and not ends.intersection(p[1:k])                  # first entry at entry_move
+        assert 0 < s['bound_share_median'] <= 1
+
+
+def test_trajectories_match_a_plain_loop(scan2d):
+    for gres in (_small(), scan2d):
+        walks = _tree_walks(gres)
+        nb, R, stop, t = _environment(gres)
+        mapped = np.asarray(gres.grids['mapped_grids'])
+        starts = pd.Index(mapped).get_indexer(walks['start'])
+        loop = _loop_walks(nb.tolist(), R.tolist(), stop.tolist(), t.tolist(), starts.tolist())
+        for (path, G), p, g in zip(loop, walks['path'], walks['return']):
+            assert mapped[path].tolist() == list(p)
+            assert g == pytest.approx(G, abs=1e-12)
+
+
+def test_trapped_walk_and_point_without_neighbours():
+    from scRL.ExactCore import _solve, _walk, WALK_ENDS
+    nb = np.array([[1, -1], [0, 2], [1, -1], [-1, -1]])                           # 0 - 1 - 2, and 3 alone
+    R = np.zeros(nb.shape)
+    R[1, 1] = 1.0                                                                  # entering 2 pays 1
+    stop, t = np.zeros(4, bool), np.zeros(4)
+    Q, V = _solve(nb, R, stop, t, .9, 5)
+    target = np.array([False, False, True, False])
+    path, moves, end, entry, G = _walk(nb, R, stop, t, Q, target, np.array([0, 3]), .9, 5, False)
+    assert path[0, :3].tolist() == [0, 1, 2] and moves.tolist() == [2, 1] and entry.tolist() == [2, -1]
+    assert [WALK_ENDS[e] for e in end] == ['trapped', 'left the grid']           # no return to 1; 3 must leave
+    assert G == pytest.approx([.9, -2.0]) and (G <= V[[0, 3]] + 1e-12).all()
+
+
+def test_trajectories_starts_and_seed():
+    gres = _small()
+    a = _tree_walks(gres, starts=7, seed=3, key_add='a')
+    b = scRL.exact_trajectories(gres, starts=7, seed=3, key_add='b')
+    assert a['start'].tolist() == b['start'].tolist() and a['start'].is_unique
+    assert set(a['start']) <= set(gres.grids['starts_cluster_grids'])
+    for col in ('return', 'moves'):
+        np.testing.assert_array_equal(a[col], b[col])
+    point = int(gres.grids['mapped_grids'][len(gres.grids['mapped_grids']) // 2])
+    one = scRL.exact_trajectories(gres, starts=[point], key_add='one')
+    assert one['start'].tolist() == [point] and one['path'][0][0] == point
+    with pytest.raises(ValueError, match='not kept grid points'):
+        scRL.exact_trajectories(gres, starts=[-7])
+    with pytest.raises(ValueError, match='at least 1'):
+        scRL.exact_trajectories(gres, starts=0)
+    with pytest.raises(ValueError, match='only'):
+        scRL.exact_trajectories(gres, starts=10 ** 6)
+
+
+def test_trajectories_errors():
+    gres = _small()
+    with pytest.raises(KeyError, match='call exact_values first'):
+        scRL.exact_trajectories(gres, key='never_solved')
+    scRL.exact_values(gres)
+    scRL.d_rewards(gres, starts=['root'], ends=['branchB'])                        # another lineage
+    with pytest.raises(ValueError, match='solved for the reward'):
+        scRL.exact_trajectories(gres, key='exact_branchA')
+    scRL.d_rewards(gres, starts=['root'], ends=['branchA'], beta=3)               # same lineage, other table
+    with pytest.raises(ValueError, match='no longer match'):
+        scRL.exact_trajectories(gres, key='exact_branchA')
+    scRL.exact_values(gres)
+    del gres.grids['exact_branchA_settings']
+    with pytest.raises(ValueError, match='No settings'):
+        scRL.exact_trajectories(gres)
+
+
+def test_trajectories_settings_follow_exact_values():
+    gres = _small()
+    scRL.exact_values(gres, gamma=.8, max_step=20, key_add='short')
+    walks = scRL.exact_trajectories(gres, key='short')
+    assert gres.grids['short_settings'] == dict(reward_type='d', reward_mode='Decision', gamma=.8, max_step=20,
+                                                reward_key='branchA')
+    assert (walks['moves'] <= 21).all() and (walks['return'] <= walks['bound'] + 1e-9).all()
+    nb, R, stop, t = _environment(gres)
+    starts = pd.Index(gres.grids['mapped_grids']).get_indexer(walks['start'])
+    loop = _loop_walks(nb.tolist(), R.tolist(), stop.tolist(), t.tolist(), starts.tolist(), gamma=.8, max_step=20)
+    np.testing.assert_allclose(walks['return'], [G for _, G in loop], atol=1e-12)
+
+
+def test_trajectories_with_gene_rewards(scan2d):
+    import warnings
+    scRL.c_rewards(scan2d, reward_keys=['geneA'], starts=['root'])
+    scRL.exact_values(scan2d, reward_type='c')
+    with warnings.catch_warnings():
+        warnings.simplefilter('error')
+        walks = scRL.exact_trajectories(scan2d)
+    s = scan2d.trajectory['exact_geneA_walks_summary']
+    assert s['bound'] and (walks['return'] <= walks['bound'] + 1e-9).all() and walks['entered'].mean() > .5
+    scRL.c_rewards(scan2d, reward_keys=['geneA'], starts=['root'], punish_keys=['geneB'])
+    scRL.exact_values(scan2d, reward_type='c')
+    with pytest.warns(UserWarning, match='not an upper bound'):
+        scRL.exact_trajectories(scan2d)
+    assert not scan2d.trajectory['exact_geneA_walks_summary']['bound']
+
+
+def test_trajectories_until_entry_and_trajectory_views(scan2d):
+    import matplotlib.pyplot as plt
+    for gres, clusters in ((_small(), ['root', 'trunk', 'branchA']), (scan2d, ['root', 'trunk', 'branchA'])):
+        full = _tree_walks(gres)
+        cut = scRL.exact_trajectories(gres, until_entry=True, key_add='to_branch')
+        ends = set(gres.grids['ends_cluster_grids'])
+        done = cut['end'] == 'entered'
+        assert done.any() and (cut.loc[done, 'entry_move'] == cut.loc[done, 'moves']).all()
+        assert all(p[-1] in ends for p in cut.loc[done, 'path'])
+        for p, q in zip(cut['path'], full['path']):                                # the same walk, cut short
+            assert list(q[:len(p)]) == list(p)
+        assert gres.grids['to_branch_visits'].sum() == sum(len(p) for p in cut['path'])
+        assert gres.trajectory['to_branch_traj'].shape[1] == gres.grids['grids'].shape[1]
+        for points in (False, True):
+            plt.close('all')
+            scRL.traj_results(gres, clusters, 'to_branch', points=points)
+            assert plt.gcf().axes
+        plt.close('all')

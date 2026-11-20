@@ -22,10 +22,22 @@ def get_traj_df(gres, trainer, n = 100, key = None):
     ----------
     None
     """
-    grids = gres.grids['grids']
-    time = gres.grids['pseudotime']
     idxs = get_traj(trainer, n=n)
     gres.trajectory[key + '_idx'] = idxs
+    trajs = np.vstack(_mean_path_points(gres, idxs))
+    gres.trajectory[key + '_traj'] = trajs
+    return
+
+
+def _mean_path_points(gres, idxs):
+    """
+    Points of the mean path of several paths (lists of grid point indices): at step i, the mean position of the
+    i-th points of the paths whose pseudotime is below i / pseudotime span; steps that more than 90% of the paths
+    do not reach are skipped.
+    """
+    grids = gres.grids['grids']
+    time = gres.grids['pseudotime']
+    n = len(idxs)
     df = pd.DataFrame(idxs)
     ls = []
     for i, c in enumerate(df.columns):
@@ -37,9 +49,7 @@ def get_traj_df(gres, trainer, n = 100, key = None):
             if any(mask):
                 idx = idx[mask]
                 ls.append(grids[idx,:].mean(axis=0))
-    trajs = np.vstack(ls)
-    gres.trajectory[key + '_traj'] = trajs
-    return
+    return ls
 
 
 def get_traj(agent, n=50, deep=True):

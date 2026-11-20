@@ -34,6 +34,7 @@ INPUTS = EXPECTED / 'grid3d_walkthrough_inputs.npz'
 RESULTS = EXPECTED / 'grid3d_walkthrough_results.json'
 
 ERY = ['7MEP', '6Ery', '5Ery', '4Ery', '3Ery', '2Ery', '1Ery']
+NEU = ['7MEP', '9GMP', '10GMP', '16Neu', '17Neu']
 MARKERS = ['Klf1', 'Gata1', 'Irf8', 'Csf1r', 'Elane', 'Mpo']
 LINEAGES = {'erythroid': ['1Ery', '2Ery'], 'monocyte': ['14Mo', '15Mo'], 'neutrophil': ['16Neu', '17Neu']}
 
@@ -103,6 +104,7 @@ def build(X3, clusters, markers):
     for name, ends in LINEAGES.items():
         scRL.d_rewards(gres, starts=['7MEP'], ends=ends)
         scRL.exact_values(gres, key_add=f'{name}_exact')
+    info['walks'] = scRL.exact_trajectories(gres, key='neutrophil_exact')    # the current reward is neutrophil
     scRL.fate_gate(gres, [f'{n}_exact' for n in LINEAGES], names=list(LINEAGES))
     scRL.fate_probabilities(gres, LINEAGES)
     # Two conditions made from the public data: cells go to 'treated' with probability 0.5, neutrophil-lineage
@@ -137,6 +139,9 @@ def summarise(gres, info):
             'grid_points_per_heaviest_lineage_gate': counts(gres.grids['gate_top']),
             'cells_per_condition': counts(info['conditions']),
             'grid_points_per_abundance_call': counts(gres.grids['abundance_call']),
+            'neutrophil_walks_from_7MEP': int(len(info['walks'])),
+            'neutrophil_walks_entering': int(info['walks']['entered'].sum()),
+            'neutrophil_first_walk_moves': int(info['walks']['moves'].iloc[0]),
         },
         'exact': {
             'decision_min': float(np.nanmin(exact)), 'decision_max': float(np.nanmax(exact)),
@@ -144,6 +149,7 @@ def summarise(gres, info):
             'decision_at_grid_points': {str(int(mapped[i])): float(exact[i]) for i in at},
             'contribution_mean': float(np.nanmean(np.asarray(gres.grids['ery_contribution'], dtype=float))),
             'gene_reward_mean': float(np.nanmean(np.asarray(gres.grids['ery_genes'], dtype=float))),
+            'neutrophil_walk_bound_share_median': float(info['walks']['bound_share'].median()),
         },
         'shares': {f'mean_{c}': float(np.nanmean(gres.grids['fate'][c].to_numpy(float)))
                    for c in gres.grids['fate'].columns},
@@ -278,6 +284,13 @@ def walkthrough():
         plt.close('all')
         print(f'6. trajectory of {len(gres.trajectory["ery_traj"])} averaged steps; simulator figures in '
               f'{out / "sim_output"}')
+        # Trajectories from the exact solution, no training: the neutrophil lineage, each walk up to its entry
+        scRL.d_rewards(gres, starts=['7MEP'], ends=['16Neu', '17Neu'])
+        walks = scRL.exact_trajectories(gres, key='neutrophil_exact', until_entry=True, key_add='neu_walks')
+        scRL.traj_results(gres, NEU, 'neu_walks')
+        save(plt.gcf(), '06_trajectory_exact')
+        print(f'   exact trajectories: {walks["entered"].mean():.2f} of {len(walks)} walks from 7MEP enter the '
+              f'neutrophil lineage, after a median {walks["entry_move"].median():.0f} moves')
 
         # 7. Two conditions on one grid (made in section 1 from the public data: cells go to 'treated' with
         #    probability 0.5, neutrophil-lineage cells with probability 0.15)
