@@ -15,12 +15,16 @@ def exact_values(gres, reward_type='d', reward_mode='Decision', gamma=.9, max_st
     most ``max_step + 1`` moves are made. One rule is relaxed: returning to a grid point already visited does
     not end the episode (with that rule the best return would depend on the whole path).
 
-    The result is the exact solution of this relaxed problem. Its values are an upper bound on what a policy
-    can collect under the rules the learners are trained with, and a reference for the shape of the value
-    landscape. Inside a rewarded region the best relaxed path may go back and forth between neighbouring
-    rewarded points, so the value there approaches reward / (1 - gamma). A greedy policy read from these values
-    and run under the training rules reaches the lineage and then ends by revisiting a point, so its own return
-    is well below the value. The value of a grid point is therefore the discounted distance to the best-paying
+    The result is the exact solution of this relaxed problem (in the deep environment a revisit pays -1 and
+    ends the episode). When the rewards are not negative, its values are an upper bound on what a policy can
+    collect under the deep environment's rules, and a reference for the shape of the value landscape. Lineage
+    rewards ('Decision', 'Contribution') are never negative, nor are gene rewards without ``punish_keys``; with
+    ``punish_keys`` they can be, and the bound does not hold. The tabular environment pays the pseudotime
+    change on every move and handles a revisit differently, so the bound is not for it. Inside a rewarded
+    region the best relaxed path may go back and forth between neighbouring rewarded points, so the value there
+    approaches reward / (1 - gamma). A greedy policy read from these values and run under the deep
+    environment's rules reaches the lineage and then ends by revisiting a point, so its return is lower than
+    the value. The value of a grid point is therefore the discounted distance to the best-paying
     part of the lineage (its entry with 'Decision' rewards, its far end with 'Contribution' rewards), not the
     amount of rewarded territory.
 

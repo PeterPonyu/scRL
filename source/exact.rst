@@ -34,13 +34,17 @@ pseudotime, and with it the rewards, depends on the draw. Give it ``seed`` (for 
 pseudotime reproducible without touching numpy's global generator. Once pseudotime is fixed, the exact
 solution, the lineage gate and the lineage shares are deterministic.
 
-One rule of the learners is relaxed: returning to a grid point does not end the episode. The exact solution
-is therefore that of a relaxed problem. Its values are an upper bound on what a policy can collect under the
-rules the learners are trained with, and a reference for the shape of the value landscape, not a return that
-a policy reaches. Inside a rewarded region the best relaxed path may go back and forth between neighbouring
-rewarded points, and the value there approaches reward / (1 - gamma). A greedy policy read from the exact
-solution and run under the training rules reaches the lineage and then ends by revisiting a point, so its
-own return is well below the exact value. Read the value of a grid point as the discounted distance to the
+One rule of the deep environment is relaxed: returning to a grid point does not end the episode (in the
+deep environment a revisit pays -1 and ends it). The exact solution is therefore that of a relaxed problem.
+When the rewards are not negative, its values are an upper bound on what a policy can collect under the deep
+environment's rules, and a reference for the shape of the value landscape, not a return that a policy
+reaches. Lineage rewards ('Decision' and 'Contribution') are never negative, and neither are gene rewards
+without ``punish_keys``; with ``punish_keys`` gene rewards can be negative and the bound does not hold. The
+tabular environment follows other rules (it also pays the pseudotime change on every move and handles a
+revisit differently), so the bound is not for it. Inside a rewarded region the best relaxed path may go back
+and forth between neighbouring rewarded points, and the value there approaches reward / (1 - gamma). A
+greedy policy read from the exact solution and run under the deep environment's rules reaches the lineage
+and then ends by revisiting a point, so its return is lower than the exact value. Read the value of a grid point as the discounted distance to the
 best-paying part of the lineage: its entry with 'Decision' rewards, its far end with 'Contribution' rewards.
 It is not the amount of rewarded territory.
 
@@ -65,11 +69,12 @@ Lineage shares
 
 ``scRL.fate_probabilities`` gives, for every grid point, the share of walks starting there that enter the end
 points of each lineage first within ``steps`` moves. ``forward`` biases the walk toward later pseudotime (0
-is the unbiased walk). The default is a mild bias, ``forward=0.25``, with 5,000 moves: the walk explores the
-neighbouring branches before it commits, so weak fate signals at early grid points are kept, while with
-``forward=1`` it commits to the nearest later region. A milder bias needs more moves to arrive, hence the
-larger budget; on a large grid look at ``fate_reached`` to see whether more are needed. The defaults were
-chosen on simulated data with known fate probabilities. The shares are not
+is the unbiased walk). The default is a mild bias, ``forward=0.25``, with 5,000 moves. At ``forward`` of 1
+and above each move is strongly drawn to later pseudotime (at 1, a move one median pseudotime step later
+weighs about e times a move that keeps pseudotime), so a walk seldom moves back toward a neighbouring
+branch. A smaller value lets it do so, which can keep fate signals of neighbouring lineages at early grid
+points, and needs more moves to arrive, hence the larger budget. When many grid points are still collecting
+arriving walks in the last tenth of the moves, a warning asks for more ``steps``. The shares are not
 renormalised: they sum to the share of walks that arrive at any listed lineage (``fate_reached``), so a region
 whose walks do not arrive, for example a tip that is not among the listed lineages, shows up as 'none'. At
 early grid points the split among lineages depends on ``forward`` and on which clusters are given as the ends

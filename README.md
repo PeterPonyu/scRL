@@ -145,7 +145,7 @@ A complete script on the paul15 data is in `examples/grid3d_paul15.py`.
 
 ## Exact solution and lineage gate
 
-The grid environment is small and deterministic, so the best return from every grid point can also be computed exactly, without training and, once pseudotime is fixed, without a random element (`align_pseudotime` samples its start points; `seed=0` makes them reproducible). `scRL.exact_values(gres)` stores this value and the best move for the current reward. It solves a relaxed problem in which returning to a grid point does not end the walk, so its values are an upper bound on what a policy can collect under the training rules and a reference for the value landscape; a greedy policy read from it and run under the training rules reaches the lineage and then ends by revisiting a point. `scRL.fate_gate` combines one value map per lineage into a ranking: the heaviest lineage of each point and how undecided it is (its weights are not shares of cells), and `scRL.plot_fates` draws them.
+The grid environment is small and deterministic, so the best return from every grid point can also be computed exactly, without training and, once pseudotime is fixed, without a random element (`align_pseudotime` samples its start points; `seed=0` makes them reproducible). `scRL.exact_values(gres)` stores this value and the best move for the current reward. It solves a relaxed problem in which returning to a grid point does not end the walk, so with rewards that are not negative (lineage rewards, and gene rewards without `punish_keys`) its values are an upper bound on what a policy can collect under the deep environment's rules and a reference for the value landscape; a greedy policy read from it and run under the deep environment's rules reaches the lineage and then ends by revisiting a point, so its return is lower than the value. `scRL.fate_gate` combines one value map per lineage into a ranking: the heaviest lineage of each point and how undecided it is (its weights are not shares of cells), and `scRL.plot_fates` draws them.
 
 ```python
 for end in ['0', '3']:
@@ -155,7 +155,7 @@ scRL.fate_gate(gres, ['exact_0', 'exact_3'], names=['lineage 0', 'lineage 3'])
 scRL.plot_fates(gres)
 ```
 
-`scRL.fate_probabilities(gres, {'lineage 0': '0', 'lineage 3': '3'})` gives instead, for every grid point, the share of walks on the grid that enter each lineage first within a fixed number of moves (walks that arrive at no listed lineage are counted as 'none'), drawn with `scRL.plot_fates(gres, key_add='fate')`. By default the walk has a mild bias toward later pseudotime (`forward=0.25`) and 5,000 moves to arrive, which keeps weak fate signals at early grid points; with `forward=1` the walk commits to the nearest later region.
+`scRL.fate_probabilities(gres, {'lineage 0': '0', 'lineage 3': '3'})` gives instead, for every grid point, the share of walks on the grid that enter each lineage first within a fixed number of moves (walks that arrive at no listed lineage are counted as 'none'), drawn with `scRL.plot_fates(gres, key_add='fate')`. By default the walk has a mild bias toward later pseudotime (`forward=0.25`) and 5,000 moves to arrive. At `forward=1` and above each move is strongly drawn to later pseudotime, so a walk seldom moves back toward a neighbouring branch; a smaller value lets it, which can keep fate signals of neighbouring lineages at early grid points, and needs more moves.
 
 ## Comparing conditions
 
