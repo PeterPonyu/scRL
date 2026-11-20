@@ -44,6 +44,10 @@ lineage weights. Each map is rank-scaled to 0..1 and the weights are a softmax a
 heaviest lineage (``gate_top``) and how undecided a point is (``gate_entropy``, 0 decided, 1 undecided) are
 stored for the grid points and, brought back with the Gaussian kernel of ``project_back``, for the cells.
 
+The gate is a ranking: it orders grid points within a lineage and marks the heaviest lineage of each point.
+Its weights are close to one-hot and are not shares of cells; for the share of walks reaching each lineage use
+``fate_probabilities``.
+
 ``scRL.plot_fates`` draws the heaviest lineage, how undecided each point is, and the mean lineage weights per
 cluster.
 

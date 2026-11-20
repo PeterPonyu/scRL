@@ -52,7 +52,24 @@ territory of the lineage; with 'Contribution' rewards whether they reach its far
 cells of the lineage there is nothing to reach, and its value toward the lineage falls to zero.
 
 ``scRL.compare_fates`` compares the share of each condition's cells in each lineage (for example the heaviest
-lineage from ``fate_gate``), with bootstrap intervals and a label-permutation p-value.
+lineage from ``fate_probabilities``, ``key='fate_top'``), with bootstrap intervals and a label-permutation p-value.
+
+Composition and shifts within cell states
+-----------------------------------------
+
+A difference in lineage shares between conditions is first of all a difference in which cell states are
+present: a condition with more cells in the clusters near one lineage has more cells whose heaviest lineage is
+that one.
+Read such a difference beside the cluster composition. ``standardise=True`` reweights each condition (or each
+sample) to one cluster composition and splits the difference into a composition part and a within-cluster
+part, which add up to it. To look for a shift within cell states, compare the uncommitted cells only
+(``within=['...']``, a list of clusters or a mask) with the mean of the lineage shares (``stat='mean'`` and
+``key='fate'``), which keeps the graded shares instead of counting heaviest lineages:
+
+.. code-block:: python
+
+    scRL.compare_fates(gres, 'knockout', 'control', standardise=True)
+    scRL.compare_fates(gres, 'knockout', 'control', key='fate', stat='mean', within=['progenitor'])
 
 Replicate samples
 -----------------
@@ -72,5 +89,7 @@ with a handful of libraries: three or four per condition can leave almost no gri
 correction. Where each library contributes one number the comparison has power: the share of each library's
 cells per lineage (``compare_fates``, which adds means over samples and a Welch t-test across samples) and,
 when clusters are projected, per cluster (the ``share_reference``, ``share_test``, ``pvalue_samples`` and
-``qvalue_samples`` columns of ``gres.grids['abundance_clusters']``). With replicates, read the grid map as the picture and these tables as
-the test.
+``qvalue_samples`` columns of ``gres.grids['abundance_clusters']``). With replicates, read the grid map as the
+picture and these tables as the test. When the libraries form blocks (for example replicate A of each
+condition prepared together), give the blocks as ``pairs`` (a block label per cell, or a dict library ->
+block) to add a paired test across blocks.

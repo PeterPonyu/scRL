@@ -77,7 +77,8 @@ def fate_gate(gres, keys, names=None, tau=.1, key_add='gate'):
     weights are the softmax of the scaled values divided by ``tau`` across lineages: a grid point gets most of
     its weight from the lineage in whose map it ranks highest. A small ``tau`` gives nearly one-hot weights.
     Grid points without a value in some map get no weights (NaN), ``'none'`` as heaviest lineage and NaN
-    entropy.
+    entropy. The gate ranks grid points within a lineage and marks the heaviest lineage; its weights are not
+    shares of cells (for those use ``fate_probabilities``).
 
     Parameters
     ----------
