@@ -77,8 +77,10 @@ so the drawing shows the space an episode or a walk can travel; with ``key=...``
 
 ``scRL.plot_trajectories`` draws the trajectories of one or several lineages over the grid (or the cells):
 each walk stored by ``exact_trajectories`` or ``get_traj_df`` as a thin line and their mean path as a thick
-line ending in an arrow, one colour per lineage. With Contribution rewards the walks follow each lineage to
-its far end, which shows where lineages part:
+line ending in an arrow, one colour per lineage. The mean path is a route only when the walks of one key
+follow one route; walks that part towards different end clusters are better drawn with ``mean=False`` or
+under separate keys. With Contribution rewards the walks follow each lineage to its far end, which shows
+where lineages part:
 
 .. code-block:: python
 

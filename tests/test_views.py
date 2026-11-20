@@ -118,3 +118,46 @@ def test_voxels_with_a_cut_and_a_value(scan2d):
     plt.close('all')
     with pytest.raises(ValueError, match='3 or more dimensions'):
         scRL.plot_voxels(scan2d)
+
+
+def test_voxel_colours_follow_the_colour_map_and_the_cut_side():
+    gres = _tree3d()
+    gres.grids['height'] = np.asarray(gres.grids['grids'])[np.asarray(gres.grids['mapped_grids'])][:, 1].copy()
+    ax = scRL.plot_voxels(gres, key='height', robust=False, colorbar=False)
+    G = np.asarray(gres.grids['grids'])
+    values = np.asarray(gres.grids['height'])
+    cmap, norm = plt.get_cmap('plasma'), plt.Normalize(values.min(), values.max())
+    worst = 0.
+    for poly in _collections(ax, Poly3DCollection):           # each cube's face colour is its value's colour
+        fc = poly.get_facecolor()[0][:3]
+        expected = [cmap(norm(v))[:3] for v in values]
+        worst = max(worst, min(np.abs(np.asarray(expected) - fc).max(1)))
+    assert worst < 1e-6
+    plt.close('all')
+    ax = scRL.plot_voxels(gres, cut=(1, .5))
+    # every drawn cube lies on the kept side of the cut
+    ys = G[np.asarray(gres.grids['mapped_grids'])][:, 1]
+    limit = ys.min() + .5 * np.ptp(ys)
+    tops = [np.asarray(c._vec)[1].mean() for c in _collections(ax, Poly3DCollection)]
+    assert max(tops) <= limit + np.abs(np.diff(np.unique(ys))).min() + 1e-9
+    plt.close('all')
+    for bad in ((3, .5), (1, 1.5), (0, -1)):
+        with pytest.raises(ValueError, match='cut is'):
+            scRL.plot_voxels(gres, cut=bad)
+
+
+def test_mesh_edges_without_values_stay_plain_and_colour_counts():
+    gres = _tree3d()
+    v = np.arange(len(gres.grids['mapped_grids']), dtype=float)
+    v[:200] = np.nan
+    gres.grids['partial'] = v
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter('error')
+        ax = scRL.plot_mesh(gres, key='partial', color_edges=True, colorbar=False)
+    lines = _collections(ax, Line3DCollection)
+    assert len(lines) == 2                                            # plain lines and coloured lines
+    plt.close('all')
+    _walks(gres, ['branchA'], 'A')
+    with pytest.raises(ValueError, match='colours'):
+        scRL.plot_trajectories(gres, ['A', 'A'], labels=['a', 'b'], colors=['red'])

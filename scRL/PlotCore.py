@@ -1734,8 +1734,8 @@ def plot_mesh(gres, key=None, dims=(0, 1, 2), view=(22, -58), ax=None, cmap='pla
     """
     Draw the grid as a mesh: a line for every move between two neighbouring kept grid points, and the grid points.
 
-    The lines are the moves of the decision problem (six per interior point on a 3-D grid, eight on a 2-D scan
-    grid), so the drawing shows the space an episode or a walk can travel. Without a key, travel points are dark
+    The lines are the moves of the decision problem (one per move of the grid: six per interior point of a 3-D grid
+    with axis moves, eight on a 2-D scan grid), so the drawing shows the space an episode or a walk can travel. Without a key, travel points are dark
     and boundary points light; with a key, the grid points are coloured by its value and, with ``color_edges``,
     each line by the mean value of its two ends.
 
@@ -1799,8 +1799,14 @@ def plot_mesh(gres, key=None, dims=(0, 1, 2), view=(22, -58), ax=None, cmap='pla
     elif color_edges:
         raise ValueError('color_edges needs a key to colour by.')
     if values is not None and color_edges:
-        lines = _lines(ax, three, segments, cmap=cmap, linewidths=lw, alpha=alpha)
-        lines.set_array(np.nanmean(np.column_stack([values[E[:, 0]], values[E[:, 1]]]), axis=1))
+        ends = np.column_stack([values[E[:, 0]], values[E[:, 1]]])
+        has = np.isfinite(ends).any(1)
+        if (~has).any():                                  # lines with no value at either end stay plain
+            _lines(ax, three, segments[~has], colors=edge_color, linewidths=lw, alpha=alpha)
+        with np.errstate(all='ignore'):
+            mean_end = np.nanmean(np.where(np.isfinite(ends[has]), ends[has], np.nan), axis=1)
+        lines = _lines(ax, three, segments[has], cmap=cmap, linewidths=lw, alpha=alpha)
+        lines.set_array(mean_end)
         lines.set_clim(lo, hi)
     else:
         _lines(ax, three, segments, colors=edge_color, linewidths=lw, alpha=alpha)
@@ -1848,8 +1854,10 @@ def plot_trajectories(gres, keys, labels=None, colors=None, walks=True, mean=Tru
     stored the paths (``gres.trajectory['<key>_idx']``, grid point indices). Each walk is drawn as a thin line, and
     the mean path — the mean of the walks after each is resampled to the same number of points along its own
     length — as a thick line with a white outline, a dot at its start and an arrow at its end, one colour per key.
-    On 3-D axes the trajectories are drawn in front of the grid points (the axes' ``computed_zorder`` is turned
-    off).
+    The mean path is a route only when the walks of a key follow one route; walks of one key that part towards
+    different end clusters (for example rollouts of a learner trained on several lineages) average to a line that no
+    walk takes, so draw them with ``mean=False`` or under separate keys. On 3-D axes the trajectories are drawn in
+    front of the grid points (the axes' ``computed_zorder`` is turned off).
 
     Parameters
     ----------
@@ -1946,6 +1954,7 @@ def plot_trajectories(gres, keys, labels=None, colors=None, walks=True, mean=Tru
                 if three:
                     d = d / np.linalg.norm(d) * 2 * step
                     ax.quiver(*M[-1], *d, color=colour, linewidth=lw * .8, arrow_length_ratio=.9, zorder=6)
+                    drawn.append((M[-1] + d)[None, :])
                 else:
                     ax.annotate('', xy=M[-1], xytext=M[-1] - d, arrowprops=dict(arrowstyle='-|>', color=colour,
                                                                                    lw=lw, mutation_scale=4 * lw))
@@ -1953,13 +1962,13 @@ def plot_trajectories(gres, keys, labels=None, colors=None, walks=True, mean=Tru
         handles.append(Line2D([], [], color=colour, lw=2, label=label))
     _finish_view(ax, three, dims, view, np.vstack(drawn))
     if legend:
-        ax.legend(handles=handles, loc='upper left', bbox_to_anchor=(1.0, 1.0), frameon=False)
+        ax.legend(handles=handles, loc='best', frameon=False)
     return ax
 
 
-def plot_voxels(gres, key=None, cut=None, dims=(0, 1, 2), view=(22, -58), ax=None, cmap='plasma', vmin=None,
-                vmax=None, vcenter=None, robust=True, colorbar=True, label=None, edgecolor=(0, 0, 0, .25), lw=.15,
-                alpha=1.):
+def plot_voxels(gres, key=None, cut=None, view=(22, -58), ax=None, cmap='plasma', vmin=None, vmax=None,
+                vcenter=None, robust=True, colorbar=True, label=None, edgecolor=(0, 0, 0, .25), lw=.15, alpha=1.,
+                shade=False):
     """
     Draw a 3-D grid as cubes, one per kept grid point, coloured by a stored value.
 
@@ -1976,12 +1985,9 @@ def plot_voxels(gres, key=None, cut=None, dims=(0, 1, 2), view=(22, -58), ax=Non
         boundary points light.
         (Default: None)
     cut
-        (axis, fraction): hide the grid points whose coordinate along embedding axis ``axis`` lies above that
-        fraction of the axis' range; for example (1, .5) opens the grid half-way along Dim 2.
+        (axis, fraction): hide the grid points whose coordinate along embedding axis ``axis`` (0, 1 or 2) lies above
+        that fraction (0 to 1) of the axis' range; for example (1, .5) opens the grid half-way along Dim 2.
         (Default: None)
-    dims
-        Embedding axes, as in the other views (a 3-D grid has exactly three).
-        (Default: (0, 1, 2))
     view
         Elevation and azimuth of the view.
         (Default: (22, -58))
@@ -2002,6 +2008,9 @@ def plot_voxels(gres, key=None, cut=None, dims=(0, 1, 2), view=(22, -58), ax=Non
     alpha
         Opacity of the cubes.
         (Default: 1)
+    shade
+        Shade the faces by their orientation; the colours then no longer match the colour bar exactly.
+        (Default: False)
 
     Returns
     ----------
@@ -2018,6 +2027,8 @@ def plot_voxels(gres, key=None, cut=None, dims=(0, 1, 2), view=(22, -58), ax=Non
     show = filled.copy()
     if cut is not None:
         axis, fraction = int(cut[0]), float(cut[1])
+        if axis not in (0, 1, 2) or not 0 <= fraction <= 1:
+            raise ValueError('cut is (axis, fraction) with axis 0, 1 or 2 and fraction between 0 and 1.')
         coord = G[:, axis]
         lo, hi = coord[mapped].min(), coord[mapped].max()
         show &= coord <= lo + fraction * (hi - lo)
@@ -2047,7 +2058,7 @@ def plot_voxels(gres, key=None, cut=None, dims=(0, 1, 2), view=(22, -58), ax=Non
         colours = rgba
         mappable = plt.cm.ScalarMappable(norm=norm, cmap=cm)
     ax.voxels(X, Y, Z, show.reshape(shape), facecolors=colours.reshape(shape + (4,)), edgecolor=edgecolor,
-              linewidth=lw)
+              linewidth=lw, shade=shade)
     _finish_view(ax, True, [0, 1, 2], view, G[mapped])
     if colorbar and mappable is not None:
         ax.figure.colorbar(mappable, ax=ax, shrink=.6, pad=.02, label=key if label is None else label,
