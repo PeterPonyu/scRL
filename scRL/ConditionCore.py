@@ -570,63 +570,208 @@ def _welch(a, b):
     return t, df, p
 
 
-def shares_by_sample(gres, samples, key='gate_top'):
+def _selection(gres, within):
+    """Boolean mask over cells: all cells, a given mask, or the cells of the given clusters."""
+    n = len(gres.embedding['embedding'])
+    if within is None:
+        return np.ones(n, bool)
+    if isinstance(within, (str, list, tuple)) or (isinstance(within, np.ndarray) and within.dtype.kind in 'OUS'):
+        if 'clusters' not in gres.embedding:
+            raise ValueError('within= by cluster names needs projected clusters (project_cluster).')
+        names = [within] if isinstance(within, str) else list(within)
+        clusters = np.asarray(gres.embedding['clusters']).astype(str)
+        unknown = [c for c in names if str(c) not in set(clusters.tolist())]
+        if unknown:
+            raise ValueError(f'Cluster(s) {unknown} not found. Clusters present: {sorted(set(clusters.tolist()))}')
+        return np.isin(clusters, [str(c) for c in names])
+    mask = np.asarray(within)
+    if mask.dtype != bool or len(mask) != n:
+        raise ValueError(f'within must be None, cluster names, or a boolean mask over the {n} cells.')
+    return mask
+
+
+def _statistic(gres, key, stat, cells):
     """
-    Share of each sample's cells in each category of a cell label (for example the heaviest lineage).
+    Per-cell values whose mean over a group of cells is the statistic, for the given cells, and the categories.
+    'top': one-hot of the categories of ``gres.embedding[key]``; 'mean': the columns ``key + '_' + name``.
+    """
+    if stat == 'top':
+        if key not in gres.embedding:
+            raise KeyError(f'{key!r} is not stored for the cells; available keys: {sorted(map(str, gres.embedding))}')
+        cell_key = np.asarray(gres.embedding[key]).astype(str)[cells]
+        cats = sorted(set(cell_key.tolist()))
+        return (cell_key[:, None] == np.array(cats)[None, :]).astype(float), cats
+    if stat != 'mean':
+        raise ValueError(f"stat must be 'top' or 'mean', got {stat!r}")
+    table = gres.grids.get(key)
+    names = [str(c) for c in table.columns] if isinstance(table, pd.DataFrame) else []
+    names = [n for n in names if f'{key}_{n}' in gres.embedding]
+    if not names:
+        raise ValueError(f"stat='mean' needs the per-lineage columns '{key}_<name>' written by fate_probabilities or "
+                         f"fate_gate (key_add={key!r}); none were found.")
+    V = np.column_stack([np.asarray(gres.embedding[f'{key}_{n}'], dtype=float)[cells] for n in names])
+    return V, names
+
+
+def _group_mean(V):
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', RuntimeWarning)
+        return np.nanmean(V, axis=0)
+
+
+def _composition(V, clusters, units, kept):
+    """
+    Per unit: cluster weights (over all clusters present), within-cluster statistics (0 where a unit has no cells
+    of a cluster) and the statistic standardised to the pooled composition of the kept clusters.
+    """
+    all_clusters = sorted(set(clusters.tolist()))
+    pooled = np.array([(clusters == c).mean() for c in kept])
+    pooled = pooled / pooled.sum()
+    out = {}
+    for u, cells in units.items():
+        w = np.array([(clusters[cells] == c).mean() for c in all_clusters])
+        stat_c = np.array([_group_mean(V[cells][clusters[cells] == c]) if (clusters[cells] == c).any()
+                           else np.zeros(V.shape[1]) for c in all_clusters])
+        index = [all_clusters.index(c) for c in kept]
+        out[u] = (w, stat_c, pooled @ stat_c[index])
+    return all_clusters, out
+
+
+def _kept_clusters(clusters, units):
+    """Clusters present in every unit, and the dropped ones."""
+    present = [set(clusters[cells].tolist()) for cells in units.values()]
+    kept = sorted(set.intersection(*present)) if present else []
+    dropped = sorted(set(clusters.tolist()) - set(kept))
+    return kept, dropped
+
+
+def _check_selected(units, what):
+    for u, cells in units.items():
+        if not cells.any():
+            raise ValueError(f'The selection holds no cells of {what} {u!r}.')
+
+
+def shares_by_sample(gres, samples, key='gate_top', stat='top', within=None, standardise=False):
+    """
+    Share of each sample's cells in each category of a cell label (for example the heaviest lineage), or the
+    mean of per-lineage values over each sample's cells.
 
     With replicate samples (libraries) the sample is the unit of a comparison: each sample contributes one
-    share per category, so a difference between two samples is not mistaken for a difference between
+    number per category, so a difference between two samples is not mistaken for a difference between
     conditions.
 
     Parameters
     ----------
     gres
-        Grids results after ``project_conditions`` holding the cell label ``gres.embedding[key]``.
+        Grids results after ``project_conditions``.
     samples
         One sample label per cell; a sample holds the cells of one condition only.
     key
-        Cell label to count.
+        With ``stat='top'`` the cell label to count; with ``stat='mean'`` the prefix of the per-lineage columns
+        written by ``fate_probabilities`` or ``fate_gate`` (for example 'fate').
         (Default: 'gate_top', from ``fate_gate``)
+    stat
+        'top': share of cells in each category; 'mean': mean of each per-lineage column over the cells (cells
+        with a missing value are left out of that column's mean).
+        (Default: 'top')
+    within
+        Restrict to these cells: a boolean mask over cells or a list of cluster names.
+        (Default: None, all cells)
+    standardise
+        Also give, per category, the statistic reweighted to the pooled cluster composition of the selected
+        cells (columns ``<category>_std``), over the clusters present in every sample; the clusters left out
+        are listed in ``table.attrs['dropped_clusters']``.
+        (Default: False)
 
     Returns
     ----------
-    DataFrame, one row per sample: ``condition`` and the share of the sample's cells in each category (the
+    DataFrame, one row per sample: ``condition`` and the statistic for each category (for ``stat='top'`` the
     shares of a row sum to 1).
     """
     if 'conditions' not in gres.embedding:
         raise ValueError('No conditions on the grid: call project_conditions(gres, conditions) first.')
-    if key not in gres.embedding:
-        raise KeyError(f'{key!r} is not stored for the cells; available keys: {sorted(map(str, gres.embedding))}')
     samples, of = _sample_conditions(gres, samples)
-    cell_key = np.asarray(gres.embedding[key]).astype(str)
-    cats = sorted(set(cell_key.tolist()))
+    selected = _selection(gres, within)
+    cells = np.flatnonzero(selected)
+    V, cats = _statistic(gres, key, stat, cells)
     if 'condition' in cats:
         raise ValueError(f"gres.embedding[{key!r}] has a category named 'condition', which is the name of the "
                          f"column holding each sample's condition; rename that category.")
-    rows = {s: [(cell_key[samples == s] == c).mean() for c in cats] for s in of}
+    units = {u: samples[cells] == u for u in of}
+    _check_selected(units, 'sample')
+    rows = {u: _group_mean(V[m]) for u, m in units.items()}
     table = pd.DataFrame.from_dict(rows, orient='index', columns=cats)
-    table.insert(0, 'condition', [of[s] for s in table.index])
+    if standardise:
+        clusters = _cell_clusters(gres)[cells]
+        kept, dropped = _kept_clusters(clusters, units)
+        _, parts = _composition(V, clusters, units, kept)
+        for i, c in enumerate(cats):
+            table[f'{c}_std'] = [parts[u][2][i] for u in table.index]
+        table.attrs['dropped_clusters'] = dropped
+    table.insert(0, 'condition', [of[u] for u in table.index])
     return table
 
 
-def compare_fates(gres, test, reference, key='gate_top', samples=None, n_permutations=2000, n_boot=500, seed=0):
+def _cell_clusters(gres):
+    if 'clusters' not in gres.embedding:
+        raise ValueError('standardise=True needs projected clusters (project_cluster).')
+    return np.asarray(gres.embedding['clusters']).astype(str)
+
+
+def _blocks(gres, samples, of, pairs, test, reference):
+    """Block of each sample (from a label per cell or a mapping sample -> block); one sample per condition each."""
+    if isinstance(pairs, dict):
+        block = {str(k): v for k, v in pairs.items()}
+    else:
+        pairs = np.asarray(pairs).astype(str)
+        if len(pairs) != len(samples):
+            raise ValueError(f'pairs has {len(pairs)} labels but there are {len(samples)} cells.')
+        block = {}
+        for u in of:
+            held = sorted(set(pairs[samples == u].tolist()))
+            if len(held) != 1:
+                raise ValueError(f'Sample {u!r} lies in more than one block ({held}).')
+            block[u] = held[0]
+    members = {}
+    for u, c in of.items():
+        if c not in (test, reference):
+            continue
+        if u not in block:
+            raise ValueError(f'Sample {u!r} has no block.')
+        members.setdefault(block[u], {}).setdefault(c, []).append(u)
+    for b, by in members.items():
+        if sorted(by) != sorted([test, reference]) or any(len(v) != 1 for v in by.values()):
+            raise ValueError(f'Block {b!r} must hold exactly one sample of each condition; it holds {by}.')
+    return [(by[test][0], by[reference][0]) for _, by in sorted(members.items())]
+
+
+def compare_fates(gres, test, reference, key='gate_top', samples=None, n_permutations=2000, n_boot=500, seed=0,
+                  stat='top', within=None, standardise=False, pairs=None):
     """
-    Share of each condition's cells in each category of a cell label (for example the heaviest lineage).
+    Compare a fate statistic between two conditions: the share of cells in each category of a cell label (for
+    example the heaviest lineage), or the mean of per-lineage values (for example the lineage shares of
+    ``fate_probabilities``).
 
     Without ``samples`` the comparison is across cells: it cannot tell a difference between conditions from a
     difference between two libraries, so with one library per condition read it as a description of these two
-    libraries. With ``samples`` (at least two per condition) each sample contributes one share per category and
-    the shares are also compared across samples (Welch t-test); with a handful of libraries this is where a
-    difference between conditions can be shown.
+    libraries. With ``samples`` (at least two per condition) each sample contributes one number per category and
+    the numbers are also compared across samples (Welch t-test); with a handful of libraries this is where a
+    difference between conditions can be shown. ``pairs`` adds a paired test when the samples form blocks.
+
+    A difference in lineage shares between conditions is first of all a difference in which cell states are
+    present. ``standardise=True`` reweights each unit to one cluster composition and splits the difference into
+    a composition part and a within-cluster part; ``within=`` restricts the comparison to chosen cells (for
+    example the uncommitted clusters).
 
     Parameters
     ----------
     gres
-        Grids results after ``project_conditions`` holding the cell label ``gres.embedding[key]``.
+        Grids results after ``project_conditions``.
     test, reference
         The two condition names.
     key
-        Cell label to count.
+        With ``stat='top'`` the cell label to count; with ``stat='mean'`` the prefix of the per-lineage columns
+        written by ``fate_probabilities`` or ``fate_gate``.
         (Default: 'gate_top', from ``fate_gate``)
     samples
         One sample label per cell (each sample in one condition, at least two per condition).
@@ -640,33 +785,60 @@ def compare_fates(gres, test, reference, key='gate_top', samples=None, n_permuta
     seed
         Seed.
         (Default: 0)
+    stat
+        'top': share of cells in each category; 'mean': mean of each per-lineage column over the cells (cells
+        with a missing value are left out of that column's mean). The permutations and the bootstrap act on
+        the statistic.
+        (Default: 'top')
+    within
+        Compare only these cells: a boolean mask over cells or a list of cluster names.
+        (Default: None, all cells)
+    standardise
+        Add the statistic standardised to the pooled cluster composition of the selected cells and split the
+        difference into a composition part and a within-cluster part (needs projected clusters).
+        (Default: False)
+    pairs
+        One block label per cell, or a dict sample -> block (needs ``samples``); each block holds exactly one
+        sample of each condition. Adds a paired t-test across blocks.
+        (Default: None)
 
     Returns
     ----------
     DataFrame indexed by category: ``reference``, ``reference_low``, ``reference_high``, ``test``,
-    ``test_low``, ``test_high`` (shares with 95% bootstrap intervals), ``difference`` (test minus reference)
+    ``test_low``, ``test_high`` (statistic with 95% bootstrap intervals), ``difference`` (test minus reference)
     and ``pvalue`` (two-sided, from permuting the condition labels). With ``samples`` also
     ``reference_mean`` and ``test_mean`` (means over samples), ``difference_samples``, ``t``, ``df`` and
-    ``pvalue_samples`` (Welch t-test across samples; when the shares vary in neither condition the p-value is
-    1 for equal and 0 for different means), and ``n_reference``, ``n_test`` (numbers of samples).
+    ``pvalue_samples`` (Welch t-test across samples; when the values vary in neither condition the p-value is
+    1 for equal and 0 for different means), and ``n_reference``, ``n_test`` (numbers of samples). With
+    ``standardise``: ``reference_std``, ``test_std``, ``difference_std`` (each unit, a sample when ``samples``
+    is given and otherwise a condition, reweighted to the pooled cluster composition over the clusters present
+    in every unit; the others are listed in ``table.attrs['dropped_clusters']``), ``composition_part`` and
+    ``within_part`` (with weights w and within-cluster statistics s of the two conditions, sum of the weight
+    difference times the mean statistic, and sum of the mean weight times the statistic difference; they add
+    up exactly to ``difference``, or with ``samples`` to ``difference_samples``, when the statistic has no
+    missing values), and with ``samples`` ``pvalue_samples_std``. With ``pairs``: ``pvalue_paired`` and, with
+    ``standardise``, ``pvalue_paired_std`` (paired t-test across blocks).
     """
     labels = _conditions(gres, test, reference)
-    if key not in gres.embedding:
+    if stat == 'top' and key not in gres.embedding:
         raise KeyError(f'{key!r} is not stored for the cells; available keys: {sorted(map(str, gres.embedding))}')
-    cell_key = np.asarray(gres.embedding[key]).astype(str)
-    pool = np.flatnonzero((labels == test) | (labels == reference))
-    cats = sorted(set(cell_key[pool].tolist()))
-    C = (cell_key[pool][:, None] == np.array(cats)[None, :]).astype(float)
+    if pairs is not None and samples is None:
+        raise ValueError('pairs needs samples.')
+    selected = _selection(gres, within)
+    pool = np.flatnonzero(((labels == test) | (labels == reference)) & selected)
+    C, cats = _statistic(gres, key, stat, pool)
     is_test = labels[pool] == test
+    _check_selected({test: is_test, reference: ~is_test}, 'condition')
     rng = np.random.default_rng(seed)
+    mean = (lambda M: M.mean(0)) if stat == 'top' else _group_mean
 
     def shares(t_mask):
-        return C[t_mask].mean(0), C[~t_mask].mean(0)
+        return mean(C[t_mask]), mean(C[~t_mask])
 
     st, sr = shares(is_test)
     diff = st - sr
-    boot_t = np.array([C[is_test][rng.integers(0, is_test.sum(), is_test.sum())].mean(0) for _ in range(n_boot)])
-    boot_r = np.array([C[~is_test][rng.integers(0, (~is_test).sum(), (~is_test).sum())].mean(0)
+    boot_t = np.array([mean(C[is_test][rng.integers(0, is_test.sum(), is_test.sum())]) for _ in range(n_boot)])
+    boot_r = np.array([mean(C[~is_test][rng.integers(0, (~is_test).sum(), (~is_test).sum())])
                        for _ in range(n_boot)])
     count = np.zeros(len(cats))
     for _ in range(n_permutations):
@@ -677,15 +849,55 @@ def compare_fates(gres, test, reference, key='gate_top', samples=None, n_permuta
                           'test': st, 'test_low': np.percentile(boot_t, 2.5, axis=0),
                           'test_high': np.percentile(boot_t, 97.5, axis=0),
                           'difference': diff, 'pvalue': (1 + count) / (n_permutations + 1)}, index=cats)
+    per_sample = None
     if samples is not None:
-        _, of = _sample_conditions(gres, samples, (test, reference))
-        per = shares_by_sample(gres, samples, key)
-        per = per[per['condition'].isin([test, reference])]
-        values = per.reindex(columns=cats, fill_value=0.0)
-        a = values[per['condition'] == test].to_numpy(dtype=float)
-        b = values[per['condition'] == reference].to_numpy(dtype=float)
+        sample_of, of = _sample_conditions(gres, samples, (test, reference))
+        units = {u: sample_of[pool] == u for u, c in of.items() if c in (test, reference)}
+        _check_selected(units, 'sample')
+        per_sample = {u: mean(C[m]) for u, m in units.items()}
+        a = np.array([per_sample[u] for u in units if of[u] == test])
+        b = np.array([per_sample[u] for u in units if of[u] == reference])
         t, df, p = _welch(a, b)
         table['reference_mean'], table['test_mean'] = b.mean(0), a.mean(0)
         table['difference_samples'], table['t'], table['df'], table['pvalue_samples'] = a.mean(0) - b.mean(0), t, df, p
         table['n_reference'], table['n_test'] = len(b), len(a)
+        if pairs is not None:
+            matched = _blocks(gres, sample_of, of, pairs, test, reference)
+            table['pvalue_paired'] = _paired(np.array([per_sample[x] for x, _ in matched]),
+                                             np.array([per_sample[y] for _, y in matched]))
+    if standardise:
+        clusters = _cell_clusters(gres)[pool]
+        if samples is None:
+            units = {test: is_test, reference: ~is_test}
+        kept, dropped = _kept_clusters(clusters, units)
+        all_clusters, parts = _composition(C, clusters, units, kept)
+        side = {u: (test if (of[u] if samples is not None else u) == test else reference) for u in units}
+
+        def condition_terms(name):
+            members = [u for u in units if side[u] == name]
+            w = np.mean([parts[u][0] for u in members], axis=0)
+            weighted = np.sum([parts[u][0][:, None] * parts[u][1] for u in members], axis=0)
+            total = np.sum([parts[u][0] for u in members], axis=0)[:, None]
+            s_mean = np.where(total > 0, weighted / np.where(total > 0, total, 1), 0.0)
+            return w, s_mean, np.mean([parts[u][2] for u in members], axis=0)
+
+        w_t, s_t, std_t = condition_terms(test)
+        w_r, s_r, std_r = condition_terms(reference)
+        table['reference_std'], table['test_std'], table['difference_std'] = std_r, std_t, std_t - std_r
+        table['composition_part'] = (w_t - w_r) @ ((s_t + s_r) / 2)
+        table['within_part'] = ((w_t + w_r) / 2) @ (s_t - s_r)
+        if samples is not None:
+            a = np.array([parts[u][2] for u in units if side[u] == test])
+            b = np.array([parts[u][2] for u in units if side[u] == reference])
+            table['pvalue_samples_std'] = _welch(a, b)[2]
+            if pairs is not None:
+                table['pvalue_paired_std'] = _paired(np.array([parts[x][2] for x, _ in matched]),
+                                                     np.array([parts[y][2] for _, y in matched]))
+        table.attrs['dropped_clusters'] = dropped
     return table
+
+
+def _paired(a, b):
+    """Two-sided paired t-test of a - b across blocks, per column."""
+    with np.errstate(invalid='ignore', divide='ignore'):
+        return stats.ttest_rel(a, b, axis=0).pvalue

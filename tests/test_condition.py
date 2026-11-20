@@ -337,3 +337,164 @@ def test_shares_by_sample_rejects_a_condition_category():
     gres.embedding['lineage'] = np.where(labels == 'root', 'condition', 'other')
     with pytest.raises(ValueError, match='condition'):
         scRL.shares_by_sample(gres, samples, key='lineage')
+
+
+def _old_shares_by_sample(gres, samples, key):
+    """The table of shares_by_sample as computed before the composition options were added."""
+    labels = np.asarray(gres.embedding['conditions'])
+    samples = np.asarray(samples).astype(str)
+    of = {s: labels[samples == s][0] for s in sorted(set(samples.tolist()))}
+    cell_key = np.asarray(gres.embedding[key]).astype(str)
+    cats = sorted(set(cell_key.tolist()))
+    table = pd.DataFrame.from_dict({s: [(cell_key[samples == s] == c).mean() for c in cats] for s in of},
+                                   orient='index', columns=cats)
+    table.insert(0, 'condition', [of[s] for s in table.index])
+    return table
+
+
+def _old_compare_fates(gres, test, reference, key, samples, n_permutations, n_boot, seed=0):
+    """The table of compare_fates as computed before the composition options were added."""
+    from scRL.ConditionCore import _welch
+    labels = np.asarray(gres.embedding['conditions'])
+    cell_key = np.asarray(gres.embedding[key]).astype(str)
+    pool = np.flatnonzero((labels == test) | (labels == reference))
+    cats = sorted(set(cell_key[pool].tolist()))
+    C = (cell_key[pool][:, None] == np.array(cats)[None, :]).astype(float)
+    is_test = labels[pool] == test
+    rng = np.random.default_rng(seed)
+    shares = lambda m: (C[m].mean(0), C[~m].mean(0))
+    st, sr = shares(is_test)
+    diff = st - sr
+    boot_t = np.array([C[is_test][rng.integers(0, is_test.sum(), is_test.sum())].mean(0) for _ in range(n_boot)])
+    boot_r = np.array([C[~is_test][rng.integers(0, (~is_test).sum(), (~is_test).sum())].mean(0)
+                       for _ in range(n_boot)])
+    count = np.zeros(len(cats))
+    for _ in range(n_permutations):
+        pt, pr = shares(rng.permutation(is_test))
+        count += np.abs(pt - pr) >= np.abs(diff)
+    table = pd.DataFrame({'reference': sr, 'reference_low': np.percentile(boot_r, 2.5, axis=0),
+                          'reference_high': np.percentile(boot_r, 97.5, axis=0),
+                          'test': st, 'test_low': np.percentile(boot_t, 2.5, axis=0),
+                          'test_high': np.percentile(boot_t, 97.5, axis=0),
+                          'difference': diff, 'pvalue': (1 + count) / (n_permutations + 1)}, index=cats)
+    if samples is not None:
+        per = _old_shares_by_sample(gres, samples, key)
+        per = per[per['condition'].isin([test, reference])]
+        values = per.reindex(columns=cats, fill_value=0.0)
+        a = values[per['condition'] == test].to_numpy(dtype=float)
+        b = values[per['condition'] == reference].to_numpy(dtype=float)
+        t, df, p = _welch(a, b)
+        table['reference_mean'], table['test_mean'] = b.mean(0), a.mean(0)
+        table['difference_samples'], table['t'], table['df'], table['pvalue_samples'] = a.mean(0) - b.mean(0), t, df, p
+        table['n_reference'], table['n_test'] = len(b), len(a)
+    return table
+
+
+def test_defaults_reproduce_the_previous_tables():
+    gres, labels, conditions, samples = _samples_setup(True)
+    pd.testing.assert_frame_equal(scRL.shares_by_sample(gres, samples, key='lineage'),
+                                  _old_shares_by_sample(gres, samples, 'lineage'))
+    for s in (None, samples):
+        pd.testing.assert_frame_equal(
+            scRL.compare_fates(gres, 'A', 'B', key='lineage', samples=s, n_permutations=200, n_boot=50),
+            _old_compare_fates(gres, 'A', 'B', 'lineage', s, 200, 50))
+
+
+def _with_shares(seed=0):
+    gres, labels, conditions, samples = _samples_setup(False, seed)
+    rng = np.random.default_rng(seed)
+    W = rng.random((len(labels), 2))
+    W[rng.random(len(labels)) < .1, 0] = np.nan
+    gres.grids['fate'] = pd.DataFrame(np.zeros((len(gres.grids['mapped_grids']), 2)), columns=['x', 'y'])
+    gres.embedding['fate_x'], gres.embedding['fate_y'] = W[:, 0], W[:, 1]
+    return gres, labels, conditions, samples
+
+
+def test_mean_statistic_and_selection():
+    gres, labels, conditions, samples = _with_shares()
+    within = ['trunk', 'root']
+    mask = np.isin(labels, within)
+    table = scRL.shares_by_sample(gres, samples, key='fate', stat='mean', within=within)
+    for s in ('A1', 'B0'):
+        cells = (samples == s) & mask
+        assert table.loc[s, 'x'] == pytest.approx(np.nanmean(gres.embedding['fate_x'][cells]))
+    pd.testing.assert_frame_equal(table, scRL.shares_by_sample(gres, samples, key='fate', stat='mean', within=mask))
+    fates = scRL.compare_fates(gres, 'A', 'B', key='fate', stat='mean', within=within, n_permutations=50, n_boot=20)
+    a = (conditions == 'A') & mask
+    assert fates.loc['y', 'test'] == pytest.approx(np.nanmean(gres.embedding['fate_y'][a]))
+    with pytest.raises(ValueError, match='fate_'):
+        scRL.shares_by_sample(gres, samples, key='nothing', stat='mean')
+    with pytest.raises(ValueError):
+        scRL.shares_by_sample(gres, samples, key='fate', stat='median')
+    with pytest.raises(ValueError):
+        scRL.compare_fates(gres, 'A', 'B', key='lineage', within=np.zeros(len(labels), bool))
+    with pytest.raises(ValueError, match='nowhere'):
+        scRL.compare_fates(gres, 'A', 'B', key='lineage', within=['nowhere'])
+
+
+def _composition_case(shift_inside):
+    """Two conditions over two clusters: either different composition and equal statistics, or the reverse."""
+    from scRL.GridCore import Grids_Results
+    rng = np.random.default_rng(1)
+    n = 4000
+    clusters = np.where(rng.random(n) < .5, 'c1', 'c2')
+    conditions = np.where(rng.random(n) < .5, 'A', 'B')
+    if not shift_inside:                                   # B holds more of c1; within clusters nothing differs
+        flip = (conditions == 'B') & (clusters == 'c2') & (rng.random(n) < .5)
+        clusters[flip] = 'c1'
+    top = np.where(clusters == 'c1', rng.random(n) < .8, rng.random(n) < .2)
+    if shift_inside:                                       # same composition; in c1, A is less often 'yes'
+        top = np.where((clusters == 'c1') & (conditions == 'A'), rng.random(n) < .5, top)
+    g = Grids_Results()
+    g.embedding['embedding'] = rng.random((n, 3))
+    g.embedding['clusters'] = pd.Series(pd.Categorical(clusters))
+    g.embedding['conditions'] = conditions
+    g.embedding['top'] = np.where(top, 'yes', 'no')
+    return g
+
+
+def test_composition_part_and_within_part():
+    g = _composition_case(shift_inside=False)
+    t = scRL.compare_fates(g, 'A', 'B', key='top', standardise=True, n_permutations=10, n_boot=10)
+    assert abs(t.loc['yes', 'difference']) > .05
+    assert abs(t.loc['yes', 'difference_std']) < .02 and abs(t.loc['yes', 'within_part']) < .02
+    assert t.loc['yes', 'composition_part'] == pytest.approx(t.loc['yes', 'difference'], abs=.02)
+    g = _composition_case(shift_inside=True)
+    t = scRL.compare_fates(g, 'A', 'B', key='top', standardise=True, n_permutations=10, n_boot=10)
+    assert abs(t.loc['yes', 'composition_part']) < .01
+    assert t.loc['yes', 'within_part'] == pytest.approx(t.loc['yes', 'difference'], abs=.01)
+
+
+def test_parts_add_up_and_missing_clusters_are_reported():
+    gres, labels, conditions, samples = _samples_setup(True)
+    t = scRL.compare_fates(gres, 'A', 'B', key='lineage', standardise=True, n_permutations=10, n_boot=10)
+    np.testing.assert_allclose(t['composition_part'] + t['within_part'], t['difference'], atol=1e-12)
+    assert t.attrs['dropped_clusters'] == ['branchB']                     # no branchB cells in condition A
+    t = scRL.compare_fates(gres, 'A', 'B', key='lineage', samples=samples, standardise=True, n_permutations=10,
+                           n_boot=10)
+    np.testing.assert_allclose(t['composition_part'] + t['within_part'], t['difference_samples'], atol=1e-12)
+    assert 'pvalue_samples_std' in t.columns and t.attrs['dropped_clusters'] == ['branchB']
+    per = scRL.shares_by_sample(gres, samples, key='lineage', standardise=True)
+    assert 'stem_std' in per.columns and per.attrs['dropped_clusters'] == ['branchB']
+
+
+def test_paired_test_across_blocks():
+    from scipy import stats
+    gres, labels, conditions, samples = _samples_setup(False)
+    blocks = {f'A{i}': f'block{i}' for i in range(3)} | {f'B{i}': f'block{i}' for i in range(3)}
+    t = scRL.compare_fates(gres, 'A', 'B', key='lineage', samples=samples, pairs=blocks, standardise=True,
+                           n_permutations=10, n_boot=10)
+    per = scRL.shares_by_sample(gres, samples, key='lineage')
+    expected = stats.ttest_rel(per.loc[['A0', 'A1', 'A2'], 'stem'].to_numpy(),
+                               per.loc[['B0', 'B1', 'B2'], 'stem'].to_numpy()).pvalue
+    assert t.loc['stem', 'pvalue_paired'] == pytest.approx(expected)
+    assert 'pvalue_paired_std' in t.columns
+    cell_blocks = np.array([blocks[s] for s in samples])
+    t2 = scRL.compare_fates(gres, 'A', 'B', key='lineage', samples=samples, pairs=cell_blocks, n_permutations=10,
+                            n_boot=10)
+    np.testing.assert_allclose(t2['pvalue_paired'], t['pvalue_paired'])
+    unbalanced = dict(blocks, B2='block0')
+    with pytest.raises(ValueError, match='block'):
+        scRL.compare_fates(gres, 'A', 'B', key='lineage', samples=samples, pairs=unbalanced)
+    with pytest.raises(ValueError, match='samples'):
+        scRL.compare_fates(gres, 'A', 'B', key='lineage', pairs=blocks)
