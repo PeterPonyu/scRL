@@ -200,9 +200,13 @@ def test_plot_training():
     ax = scRL.plot_training(r, window=11)
     np.testing.assert_allclose(ax.lines[0].get_ydata(), moving_average(r, 11))
     assert len(ax.figure.axes) == 1
-    ax = scRL.plot_training(r, values=np.arange(300.0), window=10)
+    v = np.random.default_rng(1).normal(size=300)
+    ax = scRL.plot_training(r, values=v, window=10)
     np.testing.assert_allclose(ax.lines[0].get_ydata(), np.convolve(r, np.ones(10) / 10, mode='valid'))
     assert len(ax.figure.axes) == 2
+    twin = ax.figure.axes[1]                       # the value estimate: same moving average, colour-coded labels
+    np.testing.assert_allclose(twin.lines[0].get_ydata(), np.convolve(v, np.ones(10) / 10, mode='valid'))
+    assert ax.yaxis.label.get_color() == 'C0' and twin.yaxis.label.get_color() == 'C1'
     fig = scRL.plot_training(r, values=np.arange(1000.0), window=11)
     returns_ax, values_ax = fig.axes
     assert returns_ax.get_xlabel() == 'Episode' and values_ax.get_xlabel() == 'Step'
@@ -764,3 +768,26 @@ def test_empty_trajectory_draws_nothing():
     ax = plt.figure().add_subplot(projection='3d')
     _path_3d(ax, np.zeros((0, 3)))
     assert not ax.collections and not ax.lines
+
+
+def test_2d_start_cluster_without_boundary_points(scan2d):
+    """The released 2-D pseudotime samples its start points on the boundary; when the start cluster has no
+    boundary point it samples from all the cluster's grid points instead of failing."""
+    gres = scan2d
+    mapped = np.asarray(gres.grids['mapped_grids'])
+    root = mapped[np.asarray(gres.grids['mapped_grids_clusters']) == 'root']
+    gres.grids['mapped_boundary'] = np.setdiff1d(np.asarray(gres.grids['mapped_boundary']), root)
+    seed_all(0)
+    scRL.align_pseudotime(gres, 'root', boundary=True, n_jobs=1)
+    assert np.isfinite(np.asarray(gres.grids['pseudotime'].loc[mapped], dtype=float)).all()
+    with pytest.raises(ValueError, match='no grid points'):
+        scRL.align_pseudotime(gres, 'not a cluster', n_jobs=1)
+
+
+def test_cell_value_error_says_how_to_project(scan2d):
+    gres = scan2d
+    gres.grids['only_grid'] = np.ones(len(gres.grids['mapped_grids']))
+    with pytest.raises(KeyError, match='project_back'):
+        scRL.plot_grids(gres, key='only_grid', cells=True)
+    with pytest.raises(KeyError, match='project_back'):
+        scRL.plot_trend(gres, 'only_grid', cells=True)

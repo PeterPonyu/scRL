@@ -314,7 +314,8 @@ def align_pseudotime(gres,
         The added key for pseudo-time
         (Default: 'pseudotime')
     boundary
-        Whether restrict the starting points to the grid boundary
+        Whether restrict the starting points to the grid boundary (all grid points of the early cluster when none
+        of them lies on the boundary)
         (Default: True)
     early_cell
         User defined starting cell
@@ -343,13 +344,17 @@ def align_pseudotime(gres,
         D = np.linalg.norm(X-grids[mapped_grids],axis=1)
         start_point = [mapped_grids[np.where(D==D.min())[0][0]]]
     else:
+        certain_clutser = mapped_grids[np.where(mapped_grids_clusters==early_cluster)[0]]
+        if not len(certain_clutser):
+            raise ValueError(f'The early cluster {early_cluster!r} has no grid points; clusters on the grid: '
+                             f'{sorted(set(map(str, mapped_grids_clusters)))}')
         if boundary:
             mapped_boundary = gres.grids['mapped_boundary']
-            certain_clutser = mapped_grids[np.where(mapped_grids_clusters==early_cluster)[0]]
             certain_boundary = list(set(certain_clutser)&set(mapped_boundary))
+            if not len(certain_boundary):      # none of its grid points on the boundary: sample from all of them
+                certain_boundary = certain_clutser
             start_point = choice(certain_boundary, n_sample_cells)
         else:
-            certain_clutser = mapped_grids[np.where(mapped_grids_clusters==early_cluster)[0]]
             start_point = choice(certain_clutser, n_sample_cells)
     adj = gres.grids['mapped_adj']
     G = nx.from_numpy_array(adj.values)

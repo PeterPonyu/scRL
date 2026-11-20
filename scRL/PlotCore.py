@@ -63,6 +63,13 @@ def _layer(coords, colour, values, labels, size=1.0, names=None):
     return layer
 
 
+def _missing_cell_key(gres, key):
+    """Message for a value asked for on the cells that is not stored there."""
+    hint = (f' It is stored on the grid: project it onto the cells with scRL.project_back(gres, {key!r}) first, or '
+            f'draw the grid points (cells=False).' if key in gres.grids else '')
+    return f'{key!r} is not stored for the cells.{hint} Keys stored for the cells: {sorted(map(str, gres.embedding))}'
+
+
 def _sub(names, mask):
     return None if names is None else np.asarray(names)[mask]
 
@@ -135,8 +142,7 @@ def _layers(gres, key, cells, dims, rim):
                            pd.Categorical(np.asarray(gres.embedding['clusters']), categories=_cluster_order(gres)),
                            names=names)]
         if key not in gres.embedding:
-            raise KeyError(f'{key!r} is not stored for the cells; available keys: '
-                           f'{sorted(map(str, gres.embedding))}')
+            raise KeyError(_missing_cell_key(gres, key))
         values = gres.embedding[key]
         if _is_categorical(values):
             return _category_layer(gres, X, values, key, True, _category_order(values), names)
@@ -960,8 +966,7 @@ def _values(gres, key, cells):
     """Cell values, or grid values at the travel points."""
     if cells:
         if key not in gres.embedding:
-            raise KeyError(f'{key!r} is not stored for the cells; available keys: '
-                           f'{sorted(map(str, gres.embedding))}')
+            raise KeyError(_missing_cell_key(gres, key))
         return np.asarray(gres.embedding[key], dtype=float).ravel()
     return _grid_values(gres, key, np.asarray(gres.grids['mapped_travel']))
 
@@ -1033,7 +1038,7 @@ def plot_trend(gres, keys, x='pseudotime', bins=20, cells=True, labels=None, col
     keep &= ~np.isnan(xv)
     xv = xv[keep]
     if ax is None:
-        ax = plt.figure(figsize=(5, 4)).add_subplot()
+        ax = plt.figure(figsize=(6.2, 4)).add_axes([.11, .12, .6, .8])
     edges = np.linspace(xv.min(), xv.max(), bins + 1)
     centres = (edges[:-1] + edges[1:]) / 2
     k = np.minimum(((xv - xv.min()) / (xv.max() - xv.min()) * bins).astype(int), bins - 1)
@@ -1048,7 +1053,7 @@ def plot_trend(gres, keys, x='pseudotime', bins=20, cells=True, labels=None, col
             ax.fill_between(centres[used], q[:, 0], q[:, 2], color=line.get_color(), alpha=.25, lw=0)
     ax.set_xlabel(xlabel if xlabel is not None else 'Pseudotime' if x == 'pseudotime' else x)
     ax.set_ylabel('Value' if ylabel is None else ylabel)
-    ax.legend()
+    ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1), frameon=False, borderaxespad=0)
     return ax
 
 
@@ -1088,7 +1093,8 @@ def plot_clusters(gres, key, cells=True, ax=None):
         lut = dict(zip(np.asarray(gres.embedding['clusters']), gres.embedding['cluster_colors']))
         for patch, c in zip(boxes['boxes'], order):
             patch.set_facecolor(lut[c])
-    ax.set_xticks(range(1, len(order) + 1), [str(c) for c in order], rotation=45, ha='right')
+    ax.set_xticks(range(1, len(order) + 1), [str(c) for c in order], rotation=45, ha='right',
+                  rotation_mode='anchor')
     ax.set_ylabel(key)
     return ax
 
@@ -1412,8 +1418,9 @@ def plot_training(returns, values=None, window=100, ax=None):
     Training curve: moving average of the episode returns, and optionally the value estimate.
 
     The trainers record one return per episode and one value estimate per step. When both have the same
-    length the value estimate is drawn on a second y axis; otherwise it is drawn in a second panel against
-    the step number, and the figure is returned.
+    length the value estimate is drawn on a second y axis as a moving average over the same window, with each
+    axis label in the colour of its line; otherwise it is drawn in a second panel against the step number, and
+    the figure is returned.
 
     Parameters
     ----------
@@ -1434,13 +1441,15 @@ def plot_training(returns, values=None, window=100, ax=None):
     The matplotlib axes of the returns, or the figure when two panels are drawn.
     """
     from .utils import moving_average
+
+    def smooth(a, w):
+        if w % 2 == 1 and w < len(a):
+            return moving_average(a, w), np.arange(1, len(a) + 1)
+        w = max(1, min(w, len(a)))
+        return np.convolve(a, np.ones(w) / w, mode='valid'), np.arange(w, len(a) + 1)
+
     r = np.asarray(returns, dtype=float)
-    if window % 2 == 1 and window < len(r):
-        y, x = moving_average(r, window), np.arange(1, len(r) + 1)
-    else:
-        w = min(window, len(r))
-        y = np.convolve(r, np.ones(w) / w, mode='valid')
-        x = np.arange(w, len(r) + 1)
+    y, x = smooth(r, window)
     two_panels = values is not None and len(values) != len(r)
     if two_panels and ax is not None:
         raise ValueError('values has one entry per step, not per episode; it is drawn in a second panel, '
@@ -1461,9 +1470,11 @@ def plot_training(returns, values=None, window=100, ax=None):
         ax_v.set_xlabel('Step')
         ax_v.set_ylabel('Value estimate')
         return fig
+    vs, xs = smooth(v, window)
     twin = ax.twinx()
-    twin.plot(np.arange(1, len(v) + 1), v, color='C1', lw=1)
-    twin.set_ylabel('Value estimate')
+    twin.plot(xs, vs, color='C1')
+    twin.set_ylabel('Value estimate', color='C1')
+    ax.set_ylabel('Return', color='C0')
     return ax
 
 
@@ -1526,18 +1537,20 @@ def plot_fates(gres, key_add='gate', cells=False, dims=(0, 1, 2), view=(22, -58)
         raise KeyError(f'No lineage weights under {key_add!r}: call fate_gate or fate_probabilities first.')
     three = np.asarray(gres.embedding['embedding']).shape[1] > 2
     W, names, clusters = _weights(gres, key_add, cells)
-    fig = plt.figure(figsize=(14, 4.6))
-    ax1 = _map_axes(fig, [0, 0, .27, .93] if three else [.04, .1, .2, .76], three)
+    fig = plt.figure(figsize=(14, 4.6) if three else (11.5, 4.2))
+    ax1 = _map_axes(fig, [0, 0, .27, .93] if three else [.035, .1, .26, .8], three)
     _draw_map(ax1, gres, f'{key_add}_top', cells, dims, view, three)
     ax1.set_title('Heaviest lineage')
     handles = _legend_handles(gres, _layers(gres, f'{key_add}_top', cells, list(dims) if three else [0, 1],
                                             False))
-    ax1.legend(handles=handles, loc='center left', bbox_to_anchor=(1, .5), frameon=False, fontsize='small')
-    ax2 = _map_axes(fig, [.34, 0, .27, .93] if three else [.39, .1, .2, .76], three)
+    ax1.legend(handles=handles, loc='center left', bbox_to_anchor=(1 if three else 1.03, .5), frameon=False,
+               fontsize='small')
+    ax2 = _map_axes(fig, [.34, 0, .27, .93] if three else [.38, .1, .26, .8], three)
     mappable = _draw_map(ax2, gres, f'{key_add}_entropy', cells, dims, view, three, cmap='viridis', vmin=0, vmax=1)
     ax2.set_title('How undecided')
-    fig.colorbar(mappable, cax=fig.add_axes([.615, .225, .01, .55], label='<colorbar>'), label='Undecided (0-1)')
-    ax3 = fig.add_axes([.785, .13, .195, .75])
+    fig.colorbar(mappable, cax=fig.add_axes([.615, .225, .01, .55] if three else [.645, .25, .011, .5],
+                                            label='<colorbar>'), label='Undecided (0-1)')
+    ax3 = fig.add_axes([.785, .13, .195, .75] if three else [.815, .12, .17, .76])
     if clusters is None:
         groups, order = np.array(['all'] * len(W)), ['all']
     else:
@@ -1730,7 +1743,7 @@ def _lines(ax, three, segments, **kw):
 
 def plot_mesh(gres, key=None, dims=(0, 1, 2), view=(22, -58), ax=None, cmap='plasma', vmin=None, vmax=None,
               vcenter=None, robust=True, colorbar=True, label=None, s=None, lw=None, alpha=None, color_edges=False,
-              edge_color='#9e9e9e'):
+              edge_color='#9e9e9e', boundary=None):
     """
     Draw the grid as a mesh: a line for every move between two neighbouring kept grid points, and the grid points.
 
@@ -1775,13 +1788,21 @@ def plot_mesh(gres, key=None, dims=(0, 1, 2), view=(22, -58), ax=None, cmap='pla
     edge_color
         Colour of the lines when they are not coloured by the value.
         (Default: '#9e9e9e')
+    boundary
+        How the boundary points are drawn: 'hide', 'grey' (light grey) or 'value' (coloured by the value like the
+        travel points). None leaves them out when a value is drawn, as ``plot_grids`` does (a move onto a boundary
+        point outside the start ends an episode, so no decision is taken there and the value describes the travel
+        points), and draws them light grey without a value.
+        (Default: None)
 
     Returns
     ----------
     The matplotlib axes.
     """
+    boundary = _boundary_rule(boundary, key)
     G, dims, three, ax = _view_setup(gres, dims, ax)
     mapped = np.asarray(gres.grids['mapped_grids'])
+    travel = np.isin(mapped, np.asarray(gres.grids['mapped_travel']))
     P = G[mapped][:, dims]
     E = _lattice_edges(gres)
     lw = (.25 if three else .4) if lw is None else lw
@@ -1791,6 +1812,8 @@ def plot_mesh(gres, key=None, dims=(0, 1, 2), view=(22, -58), ax=None, cmap='pla
     values = lo = hi = None
     if key is not None:
         values = _grid_values(gres, key, mapped)
+        if boundary != 'value':
+            values = np.where(travel, values, np.nan)
         ok = np.isfinite(values)
         if not ok.any():
             raise ValueError(f'{key!r} has no values to draw: every value is NaN.')
@@ -1813,12 +1836,13 @@ def plot_mesh(gres, key=None, dims=(0, 1, 2), view=(22, -58), ax=None, cmap='pla
     mappable = None
     if s > 0:
         if values is None:
-            travel = np.isin(mapped, np.asarray(gres.grids['mapped_travel']))
-            _scatter(ax, P[~travel], GREY, None, s, None)
+            if boundary != 'hide':
+                _scatter(ax, P[~travel], GREY, None, s, None)
             _scatter(ax, P[travel], DARK, None, s, None)
         else:
-            if (~ok).any():
-                _scatter(ax, P[~ok], GREY, None, s * .5, None)
+            grey = ~ok & travel if boundary == 'hide' else ~ok
+            if grey.any():
+                _scatter(ax, P[grey], GREY, None, s * .5, None)
             mappable = _scatter(ax, P[ok], None, values[ok], s, cmap, lo, hi)
     elif values is not None and color_edges:
         mappable = lines
@@ -1830,6 +1854,15 @@ def plot_mesh(gres, key=None, dims=(0, 1, 2), view=(22, -58), ax=None, cmap='pla
                            label=key if label is None else label,
                            extend=_extend([_layer(P[ok], None, values[ok], None)], lo, hi))
     return ax
+
+
+def _boundary_rule(boundary, key):
+    """How boundary points are drawn: None means 'hide' with a value and 'grey' without one."""
+    if boundary is None:
+        return 'grey' if key is None else 'hide'
+    if boundary not in ('grey', 'value', 'hide'):
+        raise ValueError("boundary is None, 'grey', 'value' or 'hide'.")
+    return boundary
 
 
 def _mean_by_length(paths, k=60):
@@ -1917,7 +1950,11 @@ def plot_trajectories(gres, keys, labels=None, colors=None, walks=True, mean=Tru
         if f'{key}_idx' not in gres.trajectory:
             raise KeyError(f'No trajectories under {key!r}: store them with exact_trajectories(key_add={key!r}) or '
                            f'get_traj_df(key={key!r}) first.')
+    made = ax is None
     G, dims, three, ax = _view_setup(gres, dims, ax)
+    if made and legend:                           # room for the legend on the right
+        ax.figure.set_size_inches(6.0, 4.6)
+        ax.set_position([.0, .05, .76, .9] if three else [.09, .1, .62, .82])
     if three:
         ax.computed_zorder = False                # trajectories stay in front of the grid points
     mapped = np.asarray(gres.grids['mapped_grids'])
@@ -1962,13 +1999,14 @@ def plot_trajectories(gres, keys, labels=None, colors=None, walks=True, mean=Tru
         handles.append(Line2D([], [], color=colour, lw=2, label=label))
     _finish_view(ax, three, dims, view, np.vstack(drawn))
     if legend:
-        ax.legend(handles=handles, loc='best', frameon=False)
+        ax.legend(handles=handles, loc='upper left', bbox_to_anchor=(1.02 if three else 1.04, 1), frameon=False,
+                  borderaxespad=0)
     return ax
 
 
 def plot_voxels(gres, key=None, cut=None, view=(22, -58), ax=None, cmap='plasma', vmin=None, vmax=None,
                 vcenter=None, robust=True, colorbar=True, label=None, edgecolor=(0, 0, 0, .25), lw=.15, alpha=1.,
-                shade=False):
+                shade=False, boundary=None):
     """
     Draw a 3-D grid as cubes, one per kept grid point, coloured by a stored value.
 
@@ -2011,12 +2049,19 @@ def plot_voxels(gres, key=None, cut=None, view=(22, -58), ax=None, cmap='plasma'
     shade
         Shade the faces by their orientation; the colours then no longer match the colour bar exactly.
         (Default: False)
+    boundary
+        How the boundary points are drawn: 'hide', 'grey' (light grey) or 'value' (coloured by the value like the
+        travel points). None leaves them out when a value is drawn, as ``plot_grids`` does (a move onto a boundary
+        point outside the start ends an episode, so no decision is taken there and the value describes the travel
+        points), and draws them light grey without a value.
+        (Default: None)
 
     Returns
     ----------
     The matplotlib axes.
     """
     _require_3d(gres, 'plot_voxels')
+    boundary = _boundary_rule(boundary, key)
     shape = tuple(int(x) for x in gres.grids.get('shape', ()))
     if len(shape) != 3:
         raise ValueError('plot_voxels draws 3-D grids; for 4-D and 5-D grids use plot_grids with dims.')
@@ -2024,7 +2069,9 @@ def plot_voxels(gres, key=None, cut=None, view=(22, -58), ax=None, cmap='plasma'
     mapped = np.asarray(gres.grids['mapped_grids'])
     filled = np.zeros(int(np.prod(shape)), bool)
     filled[mapped] = True
-    show = filled.copy()
+    is_travel = np.zeros(len(filled), bool)
+    is_travel[np.asarray(gres.grids['mapped_travel'])] = True
+    show = filled & is_travel if boundary == 'hide' else filled.copy()
     if cut is not None:
         axis, fraction = int(cut[0]), float(cut[1])
         if axis not in (0, 1, 2) or not 0 <= fraction <= 1:
@@ -2038,11 +2085,12 @@ def plot_voxels(gres, key=None, cut=None, view=(22, -58), ax=None, cmap='plasma'
     colours = np.zeros(filled.shape + (4,))
     mappable = None
     if key is None:
-        travel = np.isin(np.arange(len(filled)), np.asarray(gres.grids['mapped_travel']))
-        colours[filled & travel] = plt.matplotlib.colors.to_rgba(DARK, alpha)
-        colours[filled & ~travel] = plt.matplotlib.colors.to_rgba(GREY, alpha)
+        colours[filled & is_travel] = plt.matplotlib.colors.to_rgba(DARK, alpha)
+        colours[filled & ~is_travel] = plt.matplotlib.colors.to_rgba(GREY, alpha)
     else:
         values = _grid_values(gres, key, mapped)
+        if boundary != 'value':
+            values = np.where(is_travel[mapped], values, np.nan)
         ok = np.isfinite(values)
         if not ok.any():
             raise ValueError(f'{key!r} has no values to draw: every value is NaN.')

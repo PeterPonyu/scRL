@@ -123,17 +123,20 @@ def test_voxels_with_a_cut_and_a_value(scan2d):
 def test_voxel_colours_follow_the_colour_map_and_the_cut_side():
     gres = _tree3d()
     gres.grids['height'] = np.asarray(gres.grids['grids'])[np.asarray(gres.grids['mapped_grids'])][:, 1].copy()
-    ax = scRL.plot_voxels(gres, key='height', robust=False, colorbar=False)
     G = np.asarray(gres.grids['grids'])
+    mapped = np.asarray(gres.grids['mapped_grids'])
+    travel = np.isin(mapped, np.asarray(gres.grids['mapped_travel']))
     values = np.asarray(gres.grids['height'])
-    cmap, norm = plt.get_cmap('plasma'), plt.Normalize(values.min(), values.max())
-    worst = 0.
-    for poly in _collections(ax, Poly3DCollection):           # each cube's face colour is its value's colour
-        fc = poly.get_facecolor()[0][:3]
-        expected = [cmap(norm(v))[:3] for v in values]
-        worst = max(worst, min(np.abs(np.asarray(expected) - fc).max(1)))
-    assert worst < 1e-6
-    plt.close('all')
+    for boundary, drawn in ((None, values[travel]), ('value', values)):
+        ax = scRL.plot_voxels(gres, key='height', robust=False, colorbar=False, boundary=boundary)
+        cmap, norm = plt.get_cmap('plasma'), plt.Normalize(drawn.min(), drawn.max())
+        expected = np.asarray([cmap(norm(v))[:3] for v in drawn])
+        worst = 0.
+        for poly in _collections(ax, Poly3DCollection):       # each cube's face colour is its value's colour
+            fc = poly.get_facecolor()[0][:3]
+            worst = max(worst, np.abs(expected - fc).max(1).min())
+        assert worst < 1e-6
+        plt.close('all')
     ax = scRL.plot_voxels(gres, cut=(1, .5))
     # every drawn cube lies on the kept side of the cut
     ys = G[np.asarray(gres.grids['mapped_grids'])][:, 1]
@@ -161,3 +164,66 @@ def test_mesh_edges_without_values_stay_plain_and_colour_counts():
     _walks(gres, ['branchA'], 'A')
     with pytest.raises(ValueError, match='colours'):
         scRL.plot_trajectories(gres, ['A', 'A'], labels=['a', 'b'], colors=['red'])
+
+
+def _voxel_call(gres, **kw):
+    """The mask and face colours plot_voxels hands to Axes3D.voxels, flattened in grid order."""
+    fig = plt.figure()
+    ax = fig.add_subplot(projection='3d')
+    seen, draw = {}, ax.voxels
+
+    def spy(*args, **kwargs):
+        seen['filled'] = np.asarray(args[3]).ravel()
+        seen['colours'] = np.asarray(kwargs['facecolors']).reshape(-1, 4)
+        return draw(*args, **kwargs)
+
+    ax.voxels = spy
+    scRL.plot_voxels(gres, ax=ax, colorbar=False, **kw)
+    plt.close(fig)
+    return seen['filled'], seen['colours']
+
+
+def test_value_views_leave_boundary_points_out_by_default():
+    """With a value, cubes and mesh points are drawn on travel points only (as plot_grids draws values); boundary
+    points come back light grey or coloured on request, and both are drawn without a value."""
+    gres = _tree3d()
+    mapped = np.asarray(gres.grids['mapped_grids'])
+    travel = np.isin(mapped, np.asarray(gres.grids['mapped_travel']))
+    gres.grids['height'] = np.asarray(gres.grids['grids'])[mapped][:, 2].copy()
+    on_travel = np.asarray(gres.grids['mapped_travel'])
+    on_boundary = np.asarray(gres.grids['mapped_boundary'])
+    filled, _ = _voxel_call(gres, key='height')
+    assert set(np.flatnonzero(filled)) == set(on_travel.tolist())
+    filled, colours = _voxel_call(gres, key='height', boundary='grey')
+    assert set(np.flatnonzero(filled)) == set(mapped.tolist())
+    grey = matplotlib.colors.to_rgb('#d9d9d9')
+    assert np.allclose(colours[on_boundary, :3], grey)
+    assert not np.isclose(colours[on_travel, :3], grey).all(1).any()
+    filled, _ = _voxel_call(gres)                                     # the structure view keeps both kinds
+    assert set(np.flatnonzero(filled)) == set(mapped.tolist())
+    for boundary, n in ((None, travel.sum()), ('grey', len(mapped)), ('value', len(mapped))):
+        ax = scRL.plot_mesh(gres, key='height', colorbar=False, boundary=boundary)
+        points = sum(len(c._offsets3d[0]) for c in ax.collections if hasattr(c, '_offsets3d'))
+        assert points == n, (boundary, points, n)
+        plt.close('all')
+    ax = scRL.plot_mesh(gres)                                         # the structure view keeps both kinds
+    assert sum(len(c._offsets3d[0]) for c in ax.collections if hasattr(c, '_offsets3d')) == len(mapped)
+    plt.close('all')
+    for view in (scRL.plot_voxels, scRL.plot_mesh):
+        with pytest.raises(ValueError, match='boundary is'):
+            view(gres, key='height', boundary='edge')
+
+
+def test_legends_sit_to_the_right_of_the_panel():
+    gres = _tree3d()
+    _walks(gres, ['branchA'], 'A')
+    _walks(gres, ['branchB'], 'B')
+    scRL.exact_values(scRL.d_rewards(gres, starts=['root'], ends=['branchA']) or gres, key_add='vA')
+    for ax in (scRL.plot_trajectories(gres, ['A', 'B'], labels=['a', 'b']),
+               scRL.plot_trend(gres, ['vA', 'pseudotime'], cells=False, labels=['value', 'pseudotime'])):
+        fig = ax.figure
+        fig.canvas.draw()
+        r = fig.canvas.get_renderer()
+        legend, panel = ax.get_legend().get_window_extent(r), ax.get_window_extent(r)
+        assert legend.x0 >= panel.x1 - 1 and legend.x1 <= fig.bbox.x1 + 1, (legend, panel, fig.bbox)
+        plt.close('all')
