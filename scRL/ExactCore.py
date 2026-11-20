@@ -15,10 +15,14 @@ def exact_values(gres, reward_type='d', reward_mode='Decision', gamma=.9, max_st
     most ``max_step + 1`` moves are made. One rule is relaxed: returning to a grid point already visited does
     not end the episode (with that rule the best return would depend on the whole path).
 
-    Because of that relaxation, inside a rewarded region the best path may go back and forth between
-    neighbouring rewarded points, so the value there approaches reward / (1 - gamma). The value of a grid point
-    is therefore the discounted distance to the best-paying part of the lineage (its entry with 'Decision'
-    rewards, its far end with 'Contribution' rewards), not the amount of rewarded territory.
+    The result is the exact solution of this relaxed problem. Its values are an upper bound on what a policy
+    can collect under the rules the learners are trained with, and a reference for the shape of the value
+    landscape. Inside a rewarded region the best relaxed path may go back and forth between neighbouring
+    rewarded points, so the value there approaches reward / (1 - gamma). A greedy policy read from these values
+    and run under the training rules reaches the lineage and then ends by revisiting a point, so its own return
+    is well below the value. The value of a grid point is therefore the discounted distance to the best-paying
+    part of the lineage (its entry with 'Decision' rewards, its far end with 'Contribution' rewards), not the
+    amount of rewarded territory.
 
     Parameters
     ----------
