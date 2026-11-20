@@ -141,7 +141,7 @@ In 3-D the agent moves one grid step along one axis at a time, so it has six mov
 
 A complete script on the paul15 data is in `examples/grid3d_paul15.py`.
 
-`examples/grid3d_walkthrough.py` runs every mode on a 3-D grid of the same data and writes its figures to `grid3d_walkthrough_output/`.
+`examples/grid3d_walkthrough.py` runs every mode on a 3-D grid of the same data and writes its figures to `grid3d_walkthrough_output/`. `python examples/grid3d_walkthrough.py --check` reruns its deterministic part on shipped 3-D coordinates and compares the results with `examples/expected/` (test data and expected results: `source/testdata.rst`).
 
 ## Exact solution and lineage gate
 
