@@ -1675,3 +1675,381 @@ def plot_conditions(gres, dims=(0, 1, 2), view=(22, -58)):
     ax4.legend(frameon=False, fontsize='small', loc='lower right')
     ax4.spines[['top', 'right']].set_visible(False)
     return fig
+
+
+def _lattice_edges(gres):
+    """Stored-position pairs of neighbouring kept grid points, each pair once: the moves of the decision problem."""
+    from .GridNDCore import is_nd, lattice_from_scan
+    lattice = gres if is_nd(gres) else lattice_from_scan(gres)
+    nb = np.asarray(lattice.grids['neighbors'])
+    p, a = np.nonzero(nb >= 0)
+    q = nb[p, a]
+    keep = p < q
+    return np.column_stack([p[keep], q[keep]])
+
+
+def _view_setup(gres, dims, ax):
+    """Lattice coordinates, the axes drawn, whether the view is 3-D, and an axes to draw into."""
+    three = np.asarray(gres.embedding['embedding']).shape[1] > 2
+    dims = list(dims) if three else [0, 1]
+    if ax is None:
+        fig = plt.figure(figsize=(4.6, 4.6))
+        ax = fig.add_subplot(projection='3d') if three else fig.add_subplot()
+    elif three and ax.name != '3d':
+        raise ValueError("A 3-D grid needs a 3-D axes, for example fig.add_subplot(projection='3d').")
+    return np.asarray(gres.grids['grids'], dtype=float), dims, three, ax
+
+
+def _finish_view(ax, three, dims, view, coords):
+    if three:
+        lo, hi = coords.min(0), coords.max(0)
+        pad = .02 * np.maximum(hi - lo, 1e-9)
+        ax.set_xlim(lo[0] - pad[0], hi[0] + pad[0])
+        ax.set_ylim(lo[1] - pad[1], hi[1] + pad[1])
+        ax.set_zlim(lo[2] - pad[2], hi[2] + pad[2])
+        _style_3d(ax, dims, view, coords)
+    else:
+        ax.set_aspect('equal')
+        ax.set_xticklabels([])
+        ax.set_yticklabels([])
+        ax.set_xlabel(f'Dim {dims[0] + 1}')
+        ax.set_ylabel(f'Dim {dims[1] + 1}')
+
+
+def _lines(ax, three, segments, **kw):
+    from matplotlib.collections import LineCollection
+    from mpl_toolkits.mplot3d.art3d import Line3DCollection
+    if three:
+        lines = Line3DCollection(segments, **kw)
+        ax.add_collection3d(lines, autolim=False)                # limits are set from the drawn points
+    else:
+        lines = LineCollection(segments, **kw)
+        ax.add_collection(lines)
+    return lines
+
+
+def plot_mesh(gres, key=None, dims=(0, 1, 2), view=(22, -58), ax=None, cmap='plasma', vmin=None, vmax=None,
+              vcenter=None, robust=True, colorbar=True, label=None, s=None, lw=None, alpha=None, color_edges=False,
+              edge_color='#9e9e9e'):
+    """
+    Draw the grid as a mesh: a line for every move between two neighbouring kept grid points, and the grid points.
+
+    The lines are the moves of the decision problem (six per interior point on a 3-D grid, eight on a 2-D scan
+    grid), so the drawing shows the space an episode or a walk can travel. Without a key, travel points are dark
+    and boundary points light; with a key, the grid points are coloured by its value and, with ``color_edges``,
+    each line by the mean value of its two ends.
+
+    Parameters
+    ----------
+    gres
+        Grids results.
+    key
+        Value of ``gres.grids`` to colour by (one value per kept grid point), or None.
+        (Default: None)
+    dims
+        Embedding axes to draw for 3-D and higher grids.
+        (Default: (0, 1, 2))
+    view
+        Elevation and azimuth of the 3-D view.
+        (Default: (22, -58))
+    ax
+        Axes to draw into (a 3-D axes for 3-D grids). A new figure is made when None.
+        (Default: None)
+    cmap, vmin, vmax, vcenter, robust
+        Colour map and colour limits, as in ``plot_grids``.
+    colorbar
+        Show a colour bar when a value is drawn.
+        (Default: True)
+    label
+        Colour bar label.
+        (Default: None, the key)
+    s
+        Marker size of the grid points (0 draws the lines only).
+        (Default: None, 3 in 3-D and 8 in 2-D)
+    lw, alpha
+        Width and opacity of the lines.
+        (Default: None, 0.25 and 0.45 in 3-D, 0.4 and 0.6 in 2-D)
+    color_edges
+        Colour the lines by the value (needs ``key``).
+        (Default: False)
+    edge_color
+        Colour of the lines when they are not coloured by the value.
+        (Default: '#9e9e9e')
+
+    Returns
+    ----------
+    The matplotlib axes.
+    """
+    G, dims, three, ax = _view_setup(gres, dims, ax)
+    mapped = np.asarray(gres.grids['mapped_grids'])
+    P = G[mapped][:, dims]
+    E = _lattice_edges(gres)
+    lw = (.25 if three else .4) if lw is None else lw
+    alpha = (.45 if three else .6) if alpha is None else alpha
+    s = (3 if three else 8) if s is None else s
+    segments = np.stack([P[E[:, 0]], P[E[:, 1]]], axis=1)
+    values = lo = hi = None
+    if key is not None:
+        values = _grid_values(gres, key, mapped)
+        ok = np.isfinite(values)
+        if not ok.any():
+            raise ValueError(f'{key!r} has no values to draw: every value is NaN.')
+        layer = [_layer(P[ok], None, values[ok], None)]
+        lo, hi = _value_limits(layer, vmin, vmax, vcenter, robust)
+    elif color_edges:
+        raise ValueError('color_edges needs a key to colour by.')
+    if values is not None and color_edges:
+        lines = _lines(ax, three, segments, cmap=cmap, linewidths=lw, alpha=alpha)
+        lines.set_array(np.nanmean(np.column_stack([values[E[:, 0]], values[E[:, 1]]]), axis=1))
+        lines.set_clim(lo, hi)
+    else:
+        _lines(ax, three, segments, colors=edge_color, linewidths=lw, alpha=alpha)
+    mappable = None
+    if s > 0:
+        if values is None:
+            travel = np.isin(mapped, np.asarray(gres.grids['mapped_travel']))
+            _scatter(ax, P[~travel], GREY, None, s, None)
+            _scatter(ax, P[travel], DARK, None, s, None)
+        else:
+            if (~ok).any():
+                _scatter(ax, P[~ok], GREY, None, s * .5, None)
+            mappable = _scatter(ax, P[ok], None, values[ok], s, cmap, lo, hi)
+    elif values is not None and color_edges:
+        mappable = lines
+    else:
+        _scatter(ax, P, GREY, None, 0, None)                  # sets the data limits
+    _finish_view(ax, three, dims, view, P)
+    if colorbar and mappable is not None:
+        ax.figure.colorbar(mappable, ax=ax, shrink=.6, pad=.02 if three else .05,
+                           label=key if label is None else label,
+                           extend=_extend([_layer(P[ok], None, values[ok], None)], lo, hi))
+    return ax
+
+
+def _mean_by_length(paths, k=60):
+    """Mean of several paths after resampling each to ``k`` points at equal fractions of its own length."""
+    out = []
+    for P in paths:
+        seg = np.linalg.norm(np.diff(P, axis=0), axis=1)
+        cum = np.concatenate([[0], np.cumsum(seg)])
+        if cum[-1] <= 0:
+            continue
+        f = np.linspace(0, cum[-1], k)
+        out.append(np.column_stack([np.interp(f, cum, P[:, j]) for j in range(P.shape[1])]))
+    return np.mean(out, axis=0) if out else np.empty((0, paths[0].shape[1] if paths else 0))
+
+
+def plot_trajectories(gres, keys, labels=None, colors=None, walks=True, mean=True, context='grid', dims=(0, 1, 2),
+                      view=(22, -58), ax=None, max_walks=40, seed=0, lw=None, legend=True):
+    """
+    Draw stored trajectories of one or several lineages over the grid, in 2-D or 3-D.
+
+    ``keys`` are the prefixes under which ``exact_trajectories`` (its ``key_add``) or ``get_traj_df`` (its ``key``)
+    stored the paths (``gres.trajectory['<key>_idx']``, grid point indices). Each walk is drawn as a thin line, and
+    the mean path — the mean of the walks after each is resampled to the same number of points along its own
+    length — as a thick line with a white outline, a dot at its start and an arrow at its end, one colour per key.
+    On 3-D axes the trajectories are drawn in front of the grid points (the axes' ``computed_zorder`` is turned
+    off).
+
+    Parameters
+    ----------
+    gres
+        Grids results with stored trajectories.
+    keys
+        One prefix or a list of prefixes.
+    labels
+        Legend labels, one per key.
+        (Default: None, the keys)
+    colors
+        Colours, one per key.
+        (Default: None, a qualitative palette)
+    walks
+        Draw the individual walks.
+        (Default: True)
+    mean
+        Draw the mean path of the walks.
+        (Default: True)
+    context
+        'grid' (kept grid points in light grey), 'cells' (cells in light grey) or None.
+        (Default: 'grid')
+    dims
+        Embedding axes to draw for 3-D and higher grids.
+        (Default: (0, 1, 2))
+    view
+        Elevation and azimuth of the 3-D view.
+        (Default: (22, -58))
+    ax
+        Axes to draw into (a 3-D axes for 3-D grids). A new figure is made when None.
+        (Default: None)
+    max_walks
+        Largest number of walks drawn per key; more are thinned to this number at random with ``seed``.
+        (Default: 40)
+    seed
+        Random seed for thinning the walks.
+        (Default: 0)
+    lw
+        Width of the mean path; walks are drawn at a quarter of it.
+        (Default: None, 2.2)
+    legend
+        Show a legend of the keys.
+        (Default: True)
+
+    Returns
+    ----------
+    The matplotlib axes.
+    """
+    keys = [keys] if isinstance(keys, str) else list(keys)
+    labels = list(keys) if labels is None else list(labels)
+    if len(labels) != len(keys):
+        raise ValueError(f'{len(labels)} labels for {len(keys)} keys.')
+    colors = _palette(len(keys)) if colors is None else list(colors)
+    if len(colors) < len(keys):
+        raise ValueError(f'{len(colors)} colours for {len(keys)} keys.')
+    for key in keys:
+        if f'{key}_idx' not in gres.trajectory:
+            raise KeyError(f'No trajectories under {key!r}: store them with exact_trajectories(key_add={key!r}) or '
+                           f'get_traj_df(key={key!r}) first.')
+    G, dims, three, ax = _view_setup(gres, dims, ax)
+    if three:
+        ax.computed_zorder = False                # trajectories stay in front of the grid points
+    mapped = np.asarray(gres.grids['mapped_grids'])
+    lw = 2.2 if lw is None else lw
+    if context == 'grid':
+        C = G[mapped][:, dims]
+        _scatter(ax, C, GREY, None, 2 if three else 6, None, alpha=.6, zorder=1)
+    elif context == 'cells':
+        C = np.asarray(gres.embedding['embedding'], dtype=float)[:, dims]
+        _scatter(ax, C, GREY, None, 1.5 if three else 4, None, alpha=.6, zorder=1)
+    elif context is None:
+        C = G[mapped][:, dims]
+    else:
+        raise ValueError("context must be 'grid', 'cells' or None.")
+    rng = np.random.default_rng(seed)
+    step = float(np.abs(_lattice_spacing(gres)[0][dims]).mean()) if three else None
+    handles, drawn = [], [C]
+    for key, label, colour in zip(keys, labels, colors):
+        paths = [np.asarray(p, dtype=int) for p in gres.trajectory[f'{key}_idx']]
+        paths = [p[p >= 0] for p in paths]
+        paths = [G[p][:, dims] for p in paths if len(p) > 1]
+        M = _mean_by_length(paths) if (mean and paths) else np.empty((0, len(dims)))
+        if walks and paths:
+            shown = paths if len(paths) <= max_walks else [paths[i] for i in
+                                                           np.sort(rng.choice(len(paths), max_walks, replace=False))]
+            _lines(ax, three, shown, colors=[colour], linewidths=lw / 3, alpha=.45, zorder=3, label=f'_walks {key}')
+            drawn += shown
+        if len(M) >= 2:
+            ax.plot(*M.T, color='white', lw=lw + 1.8, solid_capstyle='round', zorder=4)
+            ax.plot(*M.T, color=colour, lw=lw, solid_capstyle='round', zorder=5)
+            ax.scatter(*M[0], s=lw * 9, color='black', lw=0, zorder=6, **({'depthshade': False} if three else {}))
+            d = M[-1] - M[-2]
+            if np.linalg.norm(d) > 0:
+                if three:
+                    d = d / np.linalg.norm(d) * 2 * step
+                    ax.quiver(*M[-1], *d, color=colour, linewidth=lw * .8, arrow_length_ratio=.9, zorder=6)
+                else:
+                    ax.annotate('', xy=M[-1], xytext=M[-1] - d, arrowprops=dict(arrowstyle='-|>', color=colour,
+                                                                                   lw=lw, mutation_scale=4 * lw))
+            drawn.append(M)
+        handles.append(Line2D([], [], color=colour, lw=2, label=label))
+    _finish_view(ax, three, dims, view, np.vstack(drawn))
+    if legend:
+        ax.legend(handles=handles, loc='upper left', bbox_to_anchor=(1.0, 1.0), frameon=False)
+    return ax
+
+
+def plot_voxels(gres, key=None, cut=None, dims=(0, 1, 2), view=(22, -58), ax=None, cmap='plasma', vmin=None,
+                vmax=None, vcenter=None, robust=True, colorbar=True, label=None, edgecolor=(0, 0, 0, .25), lw=.15,
+                alpha=1.):
+    """
+    Draw a 3-D grid as cubes, one per kept grid point, coloured by a stored value.
+
+    Each cube is the cell of the regular lattice around a kept grid point, so the drawing shows the grid itself:
+    which part of the embedding it covers and the value at every point. Only outer faces are visible; ``cut``
+    removes the grid points beyond a fraction of one axis to open a section through the interior.
+
+    Parameters
+    ----------
+    gres
+        Grids results of a 3-D grid (for 4-D and 5-D grids use ``plot_grids`` with ``dims``).
+    key
+        Value of ``gres.grids`` to colour by (one value per kept grid point); None colours travel points dark and
+        boundary points light.
+        (Default: None)
+    cut
+        (axis, fraction): hide the grid points whose coordinate along embedding axis ``axis`` lies above that
+        fraction of the axis' range; for example (1, .5) opens the grid half-way along Dim 2.
+        (Default: None)
+    dims
+        Embedding axes, as in the other views (a 3-D grid has exactly three).
+        (Default: (0, 1, 2))
+    view
+        Elevation and azimuth of the view.
+        (Default: (22, -58))
+    ax
+        3-D axes to draw into. A new figure is made when None.
+        (Default: None)
+    cmap, vmin, vmax, vcenter, robust
+        Colour map and colour limits, as in ``plot_grids``.
+    colorbar
+        Show a colour bar when a value is drawn.
+        (Default: True)
+    label
+        Colour bar label.
+        (Default: None, the key)
+    edgecolor, lw
+        Colour and width of the cube edges.
+        (Default: translucent black, 0.15)
+    alpha
+        Opacity of the cubes.
+        (Default: 1)
+
+    Returns
+    ----------
+    The matplotlib axes.
+    """
+    _require_3d(gres, 'plot_voxels')
+    shape = tuple(int(x) for x in gres.grids.get('shape', ()))
+    if len(shape) != 3:
+        raise ValueError('plot_voxels draws 3-D grids; for 4-D and 5-D grids use plot_grids with dims.')
+    G, dims, three, ax = _view_setup(gres, (0, 1, 2), ax)
+    mapped = np.asarray(gres.grids['mapped_grids'])
+    filled = np.zeros(int(np.prod(shape)), bool)
+    filled[mapped] = True
+    show = filled.copy()
+    if cut is not None:
+        axis, fraction = int(cut[0]), float(cut[1])
+        coord = G[:, axis]
+        lo, hi = coord[mapped].min(), coord[mapped].max()
+        show &= coord <= lo + fraction * (hi - lo)
+    step, _ = _lattice_spacing(gres)
+    corner = np.indices(np.array(shape) + 1).astype(float)
+    X, Y, Z = (G[0, k] + (corner[k] - .5) * step[k] for k in range(3))
+    colours = np.zeros(filled.shape + (4,))
+    mappable = None
+    if key is None:
+        travel = np.isin(np.arange(len(filled)), np.asarray(gres.grids['mapped_travel']))
+        colours[filled & travel] = plt.matplotlib.colors.to_rgba(DARK, alpha)
+        colours[filled & ~travel] = plt.matplotlib.colors.to_rgba(GREY, alpha)
+    else:
+        values = _grid_values(gres, key, mapped)
+        ok = np.isfinite(values)
+        if not ok.any():
+            raise ValueError(f'{key!r} has no values to draw: every value is NaN.')
+        layer = [_layer(G[mapped][ok], None, values[ok], None)]
+        lo_c, hi_c = _value_limits(layer, vmin, vmax, vcenter, robust)
+        norm = plt.Normalize(lo_c, hi_c)
+        cm = plt.get_cmap(cmap)
+        full = np.full(len(filled), np.nan)
+        full[mapped] = values
+        rgba = cm(norm(np.nan_to_num(full, nan=lo_c)))
+        rgba[~np.isfinite(full)] = plt.matplotlib.colors.to_rgba(GREY)
+        rgba[:, 3] = alpha
+        colours = rgba
+        mappable = plt.cm.ScalarMappable(norm=norm, cmap=cm)
+    ax.voxels(X, Y, Z, show.reshape(shape), facecolors=colours.reshape(shape + (4,)), edgecolor=edgecolor,
+              linewidth=lw)
+    _finish_view(ax, True, [0, 1, 2], view, G[mapped])
+    if colorbar and mappable is not None:
+        ax.figure.colorbar(mappable, ax=ax, shrink=.6, pad=.02, label=key if label is None else label,
+                           extend=_extend(layer, lo_c, hi_c))
+    return ax

@@ -68,6 +68,26 @@ that can be rotated with the mouse (this needs plotly).
 
 ``scRL.plot_views`` shows the same 3-D view from several angles side by side, with one colour scale.
 
+``scRL.plot_mesh`` draws the grid as a mesh: a line for every move between two neighbouring kept grid points,
+so the drawing shows the space an episode or a walk can travel; with ``key=...`` the grid points (and, with
+``color_edges=True``, the lines) are coloured by a stored value.
+
+``scRL.plot_voxels`` draws a 3-D grid as cubes, one per kept grid point, coloured by a stored value;
+``cut=(1, .5)`` removes the grid points beyond half of Dim 2 and opens a section through the interior.
+
+``scRL.plot_trajectories`` draws the trajectories of one or several lineages over the grid (or the cells):
+each walk stored by ``exact_trajectories`` or ``get_traj_df`` as a thin line and their mean path as a thick
+line ending in an arrow, one colour per lineage. With Contribution rewards the walks follow each lineage to
+its far end, which shows where lineages part:
+
+.. code-block:: python
+
+    for name, ends in {'Ery': ['1Ery', '2Ery'], 'Mo': ['14Mo', '15Mo']}.items():
+        scRL.d_rewards(gres, starts=['7MEP'], ends=ends, mode='Contribution')
+        scRL.exact_values(gres, reward_mode='Contribution', key_add=f'{name}_value')
+        scRL.exact_trajectories(gres, key=f'{name}_value', key_add=name)
+    scRL.plot_trajectories(gres, ['Ery', 'Mo'], context='cells')
+
 ``scRL.plot_slices`` cuts the grid into slabs along one axis and draws each slab as a flat section, so that the
 inside of the grid can be read; with ``policy=trainer`` it also marks the direction the agent tends to move.
 

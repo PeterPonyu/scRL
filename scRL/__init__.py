@@ -13,7 +13,7 @@ from .ConditionCore import (project_conditions, compare_abundance, condition_gri
                             compare_fates, shares_by_sample)
 from .PlotCore import (plot_grids, plot_slices, plot_views, plot_trend, plot_clusters, plot_policy,
                        plot_training, plot_projections, plot_report, save_rotation, plot_style, plot_fates,
-                       plot_conditions)
+                       plot_conditions, plot_mesh, plot_trajectories, plot_voxels)
 
 # Backward compatibility aliases for deprecated function names
 lineage_rewards = d_rewards  # Renamed: lineage_rewards -> d_rewards
@@ -29,7 +29,7 @@ __all__ = ['grids_from_embedding', 'align_pseudotime', 'project_cluster', 'proje
            , 'plot_projections', 'plot_report', 'save_rotation', 'plot_style'
            , 'exact_values', 'exact_trajectories', 'fate_gate', 'fate_probabilities', 'reachability'
            , 'project_conditions', 'compare_abundance', 'condition_grid', 'compare_values', 'compare_fates', 'shares_by_sample'
-           , 'plot_fates', 'plot_conditions'
+           , 'plot_fates', 'plot_conditions', 'plot_mesh', 'plot_trajectories', 'plot_voxels'
            # Backward compatibility
            , 'lineage_rewards', 'gene_rewards', 'project_expression']
 
