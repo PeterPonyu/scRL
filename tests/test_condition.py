@@ -564,3 +564,14 @@ def test_paired_test_across_blocks():
         scRL.compare_fates(gres, 'A', 'B', key='lineage', samples=samples, pairs=unbalanced)
     with pytest.raises(ValueError, match='samples'):
         scRL.compare_fates(gres, 'A', 'B', key='lineage', pairs=blocks)
+
+
+def test_fate_comparisons_default_to_the_walk():
+    import inspect
+    for f in (scRL.compare_fates, scRL.shares_by_sample):
+        assert inspect.signature(f).parameters['key'].default == 'fate_top'
+    gres, labels, conditions, samples = _samples_setup(False)
+    with pytest.raises(KeyError, match="fate_probabilities first, or pass key='gate_top'"):
+        scRL.compare_fates(gres, 'A', 'B')
+    with pytest.raises(KeyError, match="fate_probabilities first, or pass key='gate_top'"):
+        scRL.shares_by_sample(gres, samples)

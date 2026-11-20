@@ -51,8 +51,10 @@ and a p-value. With 'Decision' rewards it asks whether a condition's cells still
 territory of the lineage; with 'Contribution' rewards whether they reach its far end. Where a condition has no
 cells of the lineage there is nothing to reach, and its value toward the lineage falls to zero.
 
-``scRL.compare_fates`` compares the share of each condition's cells in each lineage (for example the heaviest
-lineage from ``fate_probabilities``, ``key='fate_top'``), with bootstrap intervals and a label-permutation p-value.
+``scRL.compare_fates`` compares the share of each condition's cells in each lineage, by default the heaviest
+lineage from ``fate_probabilities`` (``key='fate_top'``; run it first), with bootstrap intervals and a
+label-permutation p-value. ``key='gate_top'`` counts the gate's heaviest lineage instead; the gate ranks grid
+points and its weights are not shares.
 
 Composition and shifts within cell states
 -----------------------------------------
@@ -91,7 +93,7 @@ two libraries. When each condition has several libraries, pass one sample label 
 
 .. code-block:: python
 
-    scRL.shares_by_sample(gres, adata.obs['library'], key='gate_top')      # one row per library
+    scRL.shares_by_sample(gres, adata.obs['library'])      # one row per library, heaviest walk lineage
     scRL.compare_fates(gres, 'knockout', 'control', samples=adata.obs['library'])
     scRL.compare_abundance(gres, 'knockout', 'control', samples=adata.obs['library'])
 

@@ -588,6 +588,13 @@ def _selection(gres, within):
     return mask
 
 
+def _missing_key(gres, key):
+    hint = ''
+    if key == 'fate_top':
+        hint = " Run fate_probabilities first, or pass key='gate_top' to use the gate's ranking."
+    return f'{key!r} is not stored for the cells.{hint} Available keys: {sorted(map(str, gres.embedding))}'
+
+
 def _statistic(gres, key, stat, cells):
     """
     Per-cell values whose mean over a group of cells is the statistic, for the given cells, and the categories.
@@ -595,7 +602,7 @@ def _statistic(gres, key, stat, cells):
     """
     if stat == 'top':
         if key not in gres.embedding:
-            raise KeyError(f'{key!r} is not stored for the cells; available keys: {sorted(map(str, gres.embedding))}')
+            raise KeyError(_missing_key(gres, key))
         cell_key = np.asarray(gres.embedding[key]).astype(str)[cells]
         cats = sorted(set(cell_key.tolist()))
         return (cell_key[:, None] == np.array(cats)[None, :]).astype(float), cats
@@ -649,7 +656,7 @@ def _check_selected(units, what):
             raise ValueError(f'The selection holds no cells of {what} {u!r}.')
 
 
-def shares_by_sample(gres, samples, key='gate_top', stat='top', within=None, standardise=False):
+def shares_by_sample(gres, samples, key='fate_top', stat='top', within=None, standardise=False):
     """
     Share of each sample's cells in each category of a cell label (for example the heaviest lineage), or the
     mean of per-lineage values over each sample's cells.
@@ -667,7 +674,8 @@ def shares_by_sample(gres, samples, key='gate_top', stat='top', within=None, sta
     key
         With ``stat='top'`` the cell label to count; with ``stat='mean'`` the prefix of the per-lineage columns
         written by ``fate_probabilities`` or ``fate_gate`` (for example 'fate').
-        (Default: 'gate_top', from ``fate_gate``)
+        (Default: 'fate_top', the heaviest lineage from ``fate_probabilities``; ``'gate_top'`` uses the ranking
+        of ``fate_gate``, which is not a share)
     stat
         'top': share of cells in each category; 'mean': mean of each per-lineage column over the cells (cells
         with a missing value are left out of that column's mean).
@@ -753,7 +761,7 @@ def _blocks(gres, samples, of, pairs, test, reference):
     return [(by[test][0], by[reference][0]) for _, by in sorted(members.items())]
 
 
-def compare_fates(gres, test, reference, key='gate_top', samples=None, n_permutations=2000, n_boot=500, seed=0,
+def compare_fates(gres, test, reference, key='fate_top', samples=None, n_permutations=2000, n_boot=500, seed=0,
                   stat='top', within=None, standardise=False, pairs=None):
     """
     Compare a fate statistic between two conditions: the share of cells in each category of a cell label (for
@@ -780,7 +788,8 @@ def compare_fates(gres, test, reference, key='gate_top', samples=None, n_permuta
     key
         With ``stat='top'`` the cell label to count; with ``stat='mean'`` the prefix of the per-lineage columns
         written by ``fate_probabilities`` or ``fate_gate``.
-        (Default: 'gate_top', from ``fate_gate``)
+        (Default: 'fate_top', the heaviest lineage from ``fate_probabilities``; ``'gate_top'`` uses the ranking
+        of ``fate_gate``, which is not a share)
     samples
         One sample label per cell (each sample in one condition, at least two per condition).
         (Default: None)
@@ -837,7 +846,7 @@ def compare_fates(gres, test, reference, key='gate_top', samples=None, n_permuta
     """
     labels = _conditions(gres, test, reference)
     if stat == 'top' and key not in gres.embedding:
-        raise KeyError(f'{key!r} is not stored for the cells; available keys: {sorted(map(str, gres.embedding))}')
+        raise KeyError(_missing_key(gres, key))
     if pairs is not None and samples is None:
         raise ValueError('pairs needs samples.')
     selected = _selection(gres, within)
