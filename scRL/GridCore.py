@@ -287,7 +287,8 @@ def align_pseudotime(gres,
                       key_add='pseudotime',
                       boundary=True,
                       early_cell=None,
-                      n_jobs=8
+                      n_jobs=8,
+                      seed=None
                      ):
     """
     This function aligns pseudotime across a grid-based representation of data.
@@ -295,6 +296,10 @@ def align_pseudotime(gres,
     Pseudotime is calculated using Dijkstra's algorithm for shortest paths in a graph constructed from the grid adjacency matrix.
     The function handles multiple graph components by connecting them and adjusting pseudotime accordingly.
     The result is normalized and stored.
+
+    Without ``early_cell`` the start points are sampled from the early cluster, so pseudotime depends on the
+    draw; give ``seed`` to make it reproducible. Once pseudotime is fixed, the exact solution, the lineage gate
+    and the lineage shares are deterministic.
     
     Parameters
     ----------
@@ -317,13 +322,18 @@ def align_pseudotime(gres,
     n_jobs
         Number of cores to use
         (Default: 8)
+    seed
+        Seed of a local random generator for sampling the start points; the global numpy generator is left
+        untouched. None draws from the global numpy generator (seed it with ``np.random.seed``).
+        (Default: None)
     
     Returns
     ----------
     None
     """
     if is_nd(gres):
-        return align_pseudotime_nd(gres, early_cluster, n_sample_cells, key_add, boundary, early_cell)
+        return align_pseudotime_nd(gres, early_cluster, n_sample_cells, key_add, boundary, early_cell, seed)
+    choice = np.random.choice if seed is None else np.random.default_rng(seed).choice
     start = time.time()
     grids = gres.grids['grids']
     mapped_grids = gres.grids['mapped_grids']
@@ -337,10 +347,10 @@ def align_pseudotime(gres,
             mapped_boundary = gres.grids['mapped_boundary']
             certain_clutser = mapped_grids[np.where(mapped_grids_clusters==early_cluster)[0]]
             certain_boundary = list(set(certain_clutser)&set(mapped_boundary))
-            start_point = np.random.choice(certain_boundary, n_sample_cells)
+            start_point = choice(certain_boundary, n_sample_cells)
         else:
             certain_clutser = mapped_grids[np.where(mapped_grids_clusters==early_cluster)[0]]
-            start_point = np.random.choice(certain_clutser, n_sample_cells)
+            start_point = choice(certain_clutser, n_sample_cells)
     adj = gres.grids['mapped_adj']
     G = nx.from_numpy_array(adj.values)
     G = nx.relabel.relabel_nodes(G, dict(enumerate(adj.columns)), copy=True)

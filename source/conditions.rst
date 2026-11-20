@@ -9,7 +9,7 @@ is paid by the same reward rule.
 
     gres = scRL.grids_from_embedding(X3)
     scRL.project_cluster(gres, clusters)
-    scRL.align_pseudotime(gres, early_cluster='4')
+    scRL.align_pseudotime(gres, early_cluster='4', seed=0)
     scRL.project_conditions(gres, adata.obs['condition'])
     table = scRL.compare_abundance(gres, test='knockout', reference='control')
     scRL.plot_conditions(gres)

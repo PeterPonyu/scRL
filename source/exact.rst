@@ -8,7 +8,7 @@ exactly instead of being learned. One exact solution per lineage, combined by a 
 
     gres = scRL.grids_from_embedding(X3)
     scRL.project_cluster(gres, clusters)
-    scRL.align_pseudotime(gres, early_cluster='4')
+    scRL.align_pseudotime(gres, early_cluster='4', seed=0)
     for end in ['0', '3']:
         scRL.d_rewards(gres, starts=['4'], ends=[end], mode='Decision')
         scRL.exact_values(gres)                       # stored as gres.grids['exact_<end>']
@@ -23,11 +23,16 @@ Exact solution
 
 ``scRL.exact_values`` computes, for every kept grid point, the best discounted return under the rules of the
 learners (a move off the grid costs -2 and ends the episode, a step onto the boundary outside the start
-cluster ends it, at most ``max_step + 1`` moves) by backward induction over the moves. It has no random seed and
+cluster ends it, at most ``max_step + 1`` moves) by backward induction over the moves. The solver has no random element and
 takes well under a second. It stores the values as ``gres.grids['exact_<reward key>']`` and the best move from
 every grid point as ``gres.grids['exact_<reward key>_move']``. On a regular lattice several moves are often
 equally good; ``gres.grids['exact_<reward key>_best']`` marks all of them, and ``plot_policy`` and
 ``plot_slices(policy=...)`` draw their mean, which is the reading to use.
+
+Its input does have one: ``align_pseudotime`` samples its start points from the early cluster, so
+pseudotime, and with it the rewards, depends on the draw. Give it ``seed`` (for example ``seed=0``) to make
+pseudotime reproducible without touching numpy's global generator. Once pseudotime is fixed, the exact
+solution, the lineage gate and the lineage shares are deterministic.
 
 One rule of the learners is relaxed: returning to a grid point does not end the episode. Inside a rewarded
 region the best path may therefore go back and forth between neighbouring rewarded points, and the value there

@@ -156,7 +156,8 @@ def grids_nd(X, n=None, radius=None, moves='auto'):
     Regular grid over a 2-D to 5-D embedding, kept where the cells are.
 
     The lattice has equal spacing on every axis. A lattice point is kept when a cell lies within ``radius``
-    grid steps of it; one further layer of points around them forms the rim. Kept points with fewer valid
+    grid steps of it; one further layer of points around them forms the rim (neighbours along any diagonal up to
+    four dimensions, along the axes only in five). Kept points with fewer valid
     neighbours than the number of moves are boundary points, the others are travel points.
 
     Parameters
@@ -294,9 +295,12 @@ def _closest_pair(gres, tree, in_main, in_other):
 
 
 def align_pseudotime_nd(gres, early_cluster, n_sample_cells=10, key_add='pseudotime', boundary=True,
-                        early_cell=None):
+                        early_cell=None, seed=None):
     """
     n-D version of ``align_pseudotime``.
+
+    Start points are sampled from the early cluster (from the global numpy generator, or with an integer
+    ``seed`` from a local generator that leaves the global state untouched).
 
     Pseudotime is the mean number of grid steps from start points sampled in the early cluster, min-max
     scaled; the unscaled range in grid steps is stored as ``gres.grids[key_add + '_span']``. When the grid has several connected parts, the part holding most sampled start points is the
@@ -316,7 +320,8 @@ def align_pseudotime_nd(gres, early_cluster, n_sample_cells=10, key_add='pseudot
         if boundary:
             on_boundary = list(set(candidates) & set(gres.grids['mapped_boundary']))
             candidates = on_boundary if len(on_boundary) else candidates
-        start_point = np.random.choice(candidates, n_sample_cells)
+        choice = np.random.choice if seed is None else np.random.default_rng(seed).choice
+        start_point = choice(candidates, n_sample_cells)
     starts = _positions(gres, start_point)
     adj = gres.grids['mapped_adj']
     n_parts, part = connected_components(adj, directed=False)

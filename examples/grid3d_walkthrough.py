@@ -89,7 +89,7 @@ def build(X3, clusters, markers):
     seed(0)
     gres = scRL.grids_from_embedding(X3)
     scRL.project_cluster(gres, clusters)
-    scRL.align_pseudotime(gres, early_cluster='7MEP')
+    scRL.align_pseudotime(gres, early_cluster='7MEP', seed=0)
     scRL.project_back(gres, 'pseudotime')
     scRL.project(gres, markers)
     info = {}

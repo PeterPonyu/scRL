@@ -65,7 +65,7 @@ class trainer:
         (Default: 50)
     gamma
         Decaying factor for reinforcement learning.
-        (Default: .8)
+        (Default: .9)
     tau
         Soft update percent for the target net of DDQN.
         (Default: .005)

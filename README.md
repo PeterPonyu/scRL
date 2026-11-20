@@ -145,7 +145,7 @@ A complete script on the paul15 data is in `examples/grid3d_paul15.py`.
 
 ## Exact solution and lineage gate
 
-The grid environment is small and deterministic, so the best return from every grid point can also be computed exactly, without training and without a random seed. `scRL.exact_values(gres)` stores this value and the best move for the current reward; `scRL.fate_gate` combines one value map per lineage into a ranking: the heaviest lineage of each point and how undecided it is (its weights are not shares of cells), and `scRL.plot_fates` draws them.
+The grid environment is small and deterministic, so the best return from every grid point can also be computed exactly, without training and, once pseudotime is fixed, without a random element (`align_pseudotime` samples its start points; `seed=0` makes them reproducible). `scRL.exact_values(gres)` stores this value and the best move for the current reward; `scRL.fate_gate` combines one value map per lineage into a ranking: the heaviest lineage of each point and how undecided it is (its weights are not shares of cells), and `scRL.plot_fates` draws them.
 
 ```python
 for end in ['0', '3']:

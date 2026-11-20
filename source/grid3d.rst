@@ -12,7 +12,7 @@ embedding, as in the tutorials, or over a 3-D embedding, for example a three-com
 
     gres = scRL.grids_from_embedding(X3)
     scRL.project_cluster(gres, clusters)
-    scRL.align_pseudotime(gres, early_cluster='4')
+    scRL.align_pseudotime(gres, early_cluster='4', seed=0)
     scRL.d_rewards(gres, starts=['4'], ends=['0', '3', '5'], mode='Decision')
     trainer = scRL.trainer('ActorCritic', gres, reward_type='d', reward_mode='Decision',
                            starts_prob=False, X_latent=X_pca, num_episodes=5000)
@@ -31,7 +31,9 @@ It is built the same way for any 3-D embedding: a grid point is kept when cells 
 further layer of grid points around the kept points is added. That outer layer is the boundary of the grid;
 the points inside it, where the cells are, are the points the agent travels through. Each grid point takes
 the cluster label of its nearest cell, and pseudotime is the number of grid steps from the start cluster,
-as in 2-D.
+as in 2-D. The start points are sampled from the start cluster; ``align_pseudotime(gres, early_cluster,
+seed=0)`` makes the draw, and so pseudotime, reproducible without touching numpy's global generator.
+Once pseudotime is fixed, the exact solution, the lineage gate and the lineage shares are deterministic.
 
 Moves
 -----

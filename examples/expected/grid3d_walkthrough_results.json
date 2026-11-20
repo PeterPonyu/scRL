@@ -7,15 +7,15 @@
   "rewarded_points": 720,
   "reachable_rewarded_points": 698,
   "grid_points_per_heaviest_lineage_walk": {
-   "erythroid": 2050,
-   "monocyte": 1668,
-   "neutrophil": 420,
-   "none": 230
+   "erythroid": 2184,
+   "monocyte": 1536,
+   "neutrophil": 406,
+   "none": 242
   },
   "grid_points_per_heaviest_lineage_gate": {
-   "erythroid": 1968,
-   "monocyte": 1460,
-   "neutrophil": 940
+   "erythroid": 1957,
+   "monocyte": 1347,
+   "neutrophil": 1064
   },
   "cells_per_condition": {
    "control": 1424,
@@ -28,41 +28,41 @@
   }
  },
  "exact": {
-  "decision_min": -0.026595744680851074,
-  "decision_max": 9.844663026514745,
-  "decision_mean": 3.8544162512766924,
+  "decision_min": -0.02450980392156865,
+  "decision_max": 9.823086274028507,
+  "decision_mean": 3.795677113612409,
   "decision_at_grid_points": {
-   "1603": 0.005319148936170137,
-   "6070": 6.543681042309196,
-   "7777": 5.9445449771201,
-   "9194": 2.216805622843595,
-   "10548": 4.972857450300035,
-   "11885": 5.985855148229608,
-   "13254": 1.2901815460352657,
-   "15017": 2.468151976860357,
-   "17628": 5.727051106100162,
-   "25377": 0.026595744680851074
+   "1603": 0.0,
+   "6070": 6.3963994960350545,
+   "7777": 5.830402898552434,
+   "9194": 2.211955760590978,
+   "10548": 4.871795729951259,
+   "11885": 5.896880883746577,
+   "13254": 1.287352347223606,
+   "15017": 2.4627396434865085,
+   "17628": 5.702177854600525,
+   "25377": 0.02450980392156865
   },
-  "contribution_mean": 2.0709891549059467,
-  "gene_reward_mean": 16.09764866643139
+  "contribution_mean": 2.1079950981915068,
+  "gene_reward_mean": 15.706388595066992
  },
  "shares": {
-  "mean_erythroid": 0.4678000763601084,
-  "mean_monocyte": 0.38050400198923096,
-  "mean_neutrophil": 0.0985008225476413
+  "mean_erythroid": 0.4899788193291644,
+  "mean_monocyte": 0.3601493179593765,
+  "mean_neutrophil": 0.09471223189991852
  },
  "comparison": {
-  "reference_erythroid": 0.4122191011235955,
-  "test_erythroid": 0.46018376722817766,
-  "difference_erythroid": 0.047964666104582165,
-  "pvalue_erythroid": 0.018490754622688656,
-  "reference_monocyte": 0.4417134831460674,
-  "test_monocyte": 0.48085758039816234,
-  "difference_monocyte": 0.039144097252094945,
-  "pvalue_monocyte": 0.04097951024487756,
-  "reference_neutrophil": 0.12008426966292135,
-  "test_neutrophil": 0.04211332312404288,
-  "difference_neutrophil": -0.07797094653887847,
+  "reference_erythroid": 0.44803370786516855,
+  "test_erythroid": 0.4992343032159265,
+  "difference_erythroid": 0.05120059535075794,
+  "pvalue_erythroid": 0.011494252873563218,
+  "reference_monocyte": 0.40730337078651685,
+  "test_monocyte": 0.4464012251148545,
+  "difference_monocyte": 0.03909785432833768,
+  "pvalue_monocyte": 0.043478260869565216,
+  "reference_neutrophil": 0.11867977528089887,
+  "test_neutrophil": 0.03751914241960184,
+  "difference_neutrophil": -0.08116063286129704,
   "pvalue_neutrophil": 0.0004997501249375312,
   "reference_none": 0.02598314606741573,
   "test_none": 0.016845329249617153,
