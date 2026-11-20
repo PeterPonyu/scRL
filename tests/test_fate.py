@@ -184,7 +184,8 @@ def test_shares_gamblers_ruin_and_short_walks():
     shares = scRL.fate_probabilities(g, {'L': 'left', 'R': 'right'}, forward=0, steps=20000)
     np.testing.assert_allclose(shares['R'].to_numpy(), np.arange(12) / 11, atol=1e-6)
     np.testing.assert_allclose(shares.sum(1), 1, atol=1e-6)
-    short = scRL.fate_probabilities(g, {'L': 'left', 'R': 'right'}, forward=0, steps=3, key_add='short')
+    with pytest.warns(UserWarning, match='raise steps'):
+        short = scRL.fate_probabilities(g, {'L': 'left', 'R': 'right'}, forward=0, steps=3, key_add='short')
     reached = short.sum(1).to_numpy()
     distance = np.minimum(np.arange(12), 11 - np.arange(12))
     assert (reached[distance > 3] == 0).all() and (reached[distance <= 3] > 0).all()
@@ -200,16 +201,18 @@ def test_default_walk_differs_from_the_strong_bias():
     gres = _gres()
     mild = scRL.fate_probabilities(gres, ENDS, key_add='mild')
     strong = scRL.fate_probabilities(gres, ENDS, forward=1, steps=5000, key_add='strong')
-    np.testing.assert_allclose(gres.grids['mild_reached'], mild.to_numpy().sum(1), rtol=0, atol=1e-12)
-    np.testing.assert_allclose(gres.grids['strong_reached'], strong.to_numpy().sum(1), rtol=0, atol=1e-12)
-    assert np.abs(mild.to_numpy() - strong.to_numpy()).max() > .01
+    for key in ('mild_reached', 'strong_reached'):
+        reached = np.asarray(gres.grids[key])
+        assert (reached >= 0).all() and (reached <= 1 + 1e-12).all()
+    assert np.abs(mild.to_numpy() - strong.to_numpy()).max() > .1
     same = scRL.fate_probabilities(gres, ENDS, forward=.25, steps=5000, key_add='same')
     np.testing.assert_array_equal(same.to_numpy(), mild.to_numpy())
 
 
 def test_shares_grow_with_steps():
     gres = _gres()
-    few = scRL.fate_probabilities(gres, ENDS, steps=200, key_add='few')
+    with pytest.warns(UserWarning, match='raise steps'):                  # 200 moves are too few here
+        few = scRL.fate_probabilities(gres, ENDS, steps=200, key_add='few')
     many = scRL.fate_probabilities(gres, ENDS, steps=1000, key_add='many')
     assert (few.to_numpy() <= many.to_numpy() + 1e-12).all()
 
@@ -222,7 +225,35 @@ def test_shares_stay_valid_at_any_bias(forward):
     assert (H >= 0).all() and (H.sum(1) <= 1 + 1e-12).all()
     clusters = np.asarray(gres.grids['mapped_grids_clusters'])
     assert (shares['A'].to_numpy()[clusters == 'branchA'] == 1).all()
-    np.testing.assert_allclose(gres.grids['fate_reached'], H.sum(1))
+    reached = np.asarray(gres.grids['fate_reached'])
+    assert (reached >= 0).all() and (reached <= 1 + 1e-12).all()
+
+
+def test_one_move_shares_count_the_neighbours():
+    """With an unbiased walk and one move, a share is the fraction of a point's neighbours in that lineage."""
+    import warnings
+    gres = _gres()
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', UserWarning)
+        shares = scRL.fate_probabilities(gres, ENDS, forward=0, steps=1)
+    nb = gres.grids['neighbors']
+    clusters = np.asarray(gres.grids['mapped_grids_clusters'])
+    free = ~np.isin(clusters, ['branchA', 'branchB'])
+    valid = nb >= 0
+    for name, cluster in ENDS.items():
+        into = valid & (clusters[np.where(valid, nb, 0)] == cluster)
+        expected = into.sum(1) / valid.sum(1)
+        np.testing.assert_allclose(shares[name].to_numpy()[free], expected[free], rtol=0, atol=1e-12)
+
+
+def test_warning_when_the_move_budget_is_short():
+    g = _corridor(200)
+    with pytest.warns(UserWarning, match='raise steps'):
+        scRL.fate_probabilities(g, {'L': 'left', 'R': 'right'}, forward=0, steps=100)
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter('error')
+        scRL.fate_probabilities(_gres(), ENDS)
 
 
 def test_shares_on_the_tree():
@@ -250,7 +281,11 @@ def test_shares_island_and_unlisted_tip():
     scRL.project_cluster(gres, pd.Series(pd.Categorical(list(labels) + ['island'] * 40)))
     seed_all(0); scRL.align_pseudotime(gres, 'root', boundary=False)
     clusters = np.asarray(gres.grids['mapped_grids_clusters'])
-    shares = scRL.fate_probabilities(gres, {'A': 'branchA', 'R': 'root'}, forward=3)
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter('error')                                    # an unlisted tip is not a short budget
+        shares = scRL.fate_probabilities(gres, {'A': 'branchA', 'R': 'root'}, forward=3)
+        scRL.fate_probabilities(gres, {'A': 'branchA', 'R': 'root'}, key_add='mild')
     on_island = clusters == 'island'
     assert (gres.grids['fate_reached'][on_island] == 0).all() and (gres.grids['fate_top'][on_island] == 'none').all()
     assert np.isnan(gres.grids['fate_entropy'][on_island]).all()

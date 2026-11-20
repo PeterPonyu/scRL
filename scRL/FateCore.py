@@ -1,4 +1,6 @@
 """Combine value maps of several lineages into lineage weights."""
+import warnings
+
 import numpy as np
 import pandas as pd
 from scipy import sparse
@@ -142,12 +144,13 @@ def fate_probabilities(gres, ends, forward=.25, steps=5000, policy=None, key_add
     heaviest lineage. At early grid points the split among lineages depends on ``forward`` and on which
     clusters are given as the ends of each lineage.
 
-    The default is a mild bias (``forward=0.25``) with a large move budget (``steps=5000``). A mild bias lets
-    a walk explore the neighbouring branches before it commits, so weak fate signals at early grid points are
-    kept. With ``forward=1`` the walk commits to the nearest later region, and early grid points then show
-    little of the other lineages. A milder bias needs more moves to arrive, hence the larger budget; check
-    ``<key_add>_reached`` (on a large grid, or with ``forward=0``, more moves may be needed). These defaults
-    were chosen on simulated data with known fate probabilities, where the stronger bias lost weak signals.
+    The default is a mild bias (``forward=0.25``) with a large move budget (``steps=5000``). At ``forward``
+    of 1 and above each move is strongly drawn to later pseudotime (at 1, a move one median pseudotime step
+    later weighs about e times a move that keeps pseudotime), so a walk seldom moves back toward a neighbouring
+    branch. A smaller value lets it do so, which can keep fate signals of neighbouring lineages at early grid
+    points, and needs more moves to arrive, hence the larger budget. When more than 10% of the grid points
+    still gain over 0.01 of arriving share in the last tenth of the moves, a warning says so; then raise
+    ``steps`` or accept that those points show no lineage (check ``<key_add>_reached``).
 
     Parameters
     ----------
@@ -157,17 +160,18 @@ def fate_probabilities(gres, ends, forward=.25, steps=5000, policy=None, key_add
         Dict lineage name -> cluster name or list of cluster names (at least two lineages; a cluster belongs to
         one lineage only).
     forward
-        Bias of the walk toward later pseudotime; 0 is the unbiased walk. Small values keep weak fate signals
-        at early grid points; values of 1 and above make the walk commit to the nearest later region.
+        Bias of the walk toward later pseudotime; 0 is the unbiased walk. Not used with ``policy``.
         (Default: 0.25)
     steps
-        Number of moves within which a walk must arrive; a milder bias needs more moves.
+        Number of moves within which a walk must arrive; a milder bias needs more moves. With ``policy`` it
+        only bounds the number of moves.
         (Default: 5000)
     policy
         Move probabilities instead of the walk: an array (kept grid points x moves; finite and not negative;
         rows need not be normalised, moves off the grid are ignored, a row of zeros means the walk stops
         there), or a trained
-        ``scRL.trainer`` with an actor ('ActorCritic', 'SAC').
+        ``scRL.trainer`` with an actor ('ActorCritic', 'SAC'). With ``policy``, ``forward`` is not used and
+        ``steps`` only bounds the number of moves.
         (Default: None)
     key_add
         Prefix of the stored results.
@@ -225,8 +229,17 @@ def fate_probabilities(gres, ends, forward=.25, steps=5000, policy=None, key_add
     P_ff = P[free][:, free].tocsr()
     B = np.column_stack([np.asarray(P[free][:, owner == i].sum(1)).ravel() for i in range(len(names))])
     H_free = np.zeros_like(B)
-    for _ in range(int(steps)):
+    steps = int(steps)
+    snapshot_at = steps - max(1, steps // 10)               # the last tenth of the moves
+    for k in range(steps):
+        if k == snapshot_at:
+            before = H_free.copy()
         H_free = P_ff @ H_free + B
+    still = int(((H_free - before).sum(1) > .01).sum()) / M
+    if still > .1:
+        warnings.warn(f"{still:.0%} of grid points are still collecting arriving walks at the last of {steps} "
+                      f"moves; raise steps (check '{key_add}_reached') or accept that these points show no "
+                      f"lineage.", UserWarning, stacklevel=2)
     H = np.zeros((M, len(names)))
     H[free] = H_free
     for i in range(len(names)):
