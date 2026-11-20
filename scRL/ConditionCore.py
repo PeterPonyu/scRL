@@ -112,7 +112,8 @@ def _bh(p):
     return out
 
 
-def compare_abundance(gres, test, reference, min_cells=3, alpha=.05, samples=None, n_shuffles=200, seed=0):
+def compare_abundance(gres, test, reference, min_cells=3, alpha=.05, samples=None, n_shuffles=200, seed=0,
+                      scale=None):
     """
     Where the cells of two conditions lie on the grid, and where their numbers differ.
 
@@ -152,6 +153,13 @@ def compare_abundance(gres, test, reference, min_cells=3, alpha=.05, samples=Non
     seed
         Seed of the shuffles.
         (Default: 0)
+    scale
+        Scale of the per-cluster test across samples: 'log' compares log2((count + 0.5) / (cells + 1)) of each
+        sample (count: its cells in the cluster; cells: all its cells), 'share' compares the shares. A
+        difference of shares is dominated by the large clusters and by the samples with the most extreme
+        composition; a ratio is not, so the log scale finds a change in one cluster that the share scale misses.
+        None means 'log' here, as the category is always the cluster label.
+        (Default: None)
 
     Returns
     ----------
@@ -162,10 +170,13 @@ def compare_abundance(gres, test, reference, min_cells=3, alpha=.05, samples=Non
     ``abundance_test`` and ``abundance_reference``, and the per-cluster summary ``abundance_clusters`` (with
     ``samples`` and projected clusters also ``share_reference``, ``share_test``: the mean over samples of the
     share of a sample's cells in the cluster, where cells without a cluster label count in no cluster so a
-    sample's shares can sum to less than 1; ``pvalue_samples`` from a Welch t-test across samples, 1 or 0 when
-    the shares vary in neither condition; and ``qvalue_samples``, Benjamini-Hochberg over clusters).
+    sample's shares can sum to less than 1; ``pvalue_samples`` from a Welch t-test across samples on the
+    chosen ``scale``, 1 or 0 when the values vary in neither condition; ``qvalue_samples``, Benjamini-Hochberg
+    over clusters; and with ``scale='log'`` ``log2fc_samples``, the mean over test samples minus the mean over
+    reference samples of the log2 pseudo-counted shares).
     """
     labels = _conditions(gres, test, reference)
+    scale = _resolve_scale('clusters', scale)
     if 'condition_counts' not in gres.grids:
         raise ValueError('No condition counts on the grid: call project_conditions(gres, conditions) first.')
     counts = gres.grids['condition_counts']
@@ -234,8 +245,14 @@ def compare_abundance(gres, test, reference, min_cells=3, alpha=.05, samples=Non
         shares = {s: [(cell_clusters[per_sample == s] == str(c)).mean() for c in order] for s in of}
         a = np.array([shares[s] for s in of if of[s] == test])
         b = np.array([shares[s] for s in of if of[s] == reference])
-        _, _, p = _welch(a, b)
         summary['share_reference'], summary['share_test'] = b.mean(0), a.mean(0)
+        if scale == 'log':
+            y = {s: _log_share(np.array([(cell_clusters[per_sample == s] == str(c)).sum() for c in order], float),
+                               (per_sample == s).sum()) for s in of}
+            a = np.array([y[s] for s in of if of[s] == test])
+            b = np.array([y[s] for s in of if of[s] == reference])
+            summary['log2fc_samples'] = a.mean(0) - b.mean(0)
+        _, _, p = _welch(a, b)
         summary['pvalue_samples'] = p
         q = np.full(len(p), np.nan)
         ok = ~np.isnan(p)
@@ -243,6 +260,30 @@ def compare_abundance(gres, test, reference, min_cells=3, alpha=.05, samples=Non
         summary['qvalue_samples'] = q
     gres.grids['abundance_clusters'] = summary
     return table
+
+
+def _log_share(count, cells):
+    """log2((count + 0.5) / (cells + 1)): a sample's share of cells on a log scale, with a fixed pseudo-count."""
+    return np.log2((count + .5) / (cells + 1))
+
+
+SCALE_RULE = ("scale='log' compares log2((count + 0.5) / (cells + 1)) per sample, 'share' compares the shares; "
+              "None means 'log' for the cluster label (key 'clusters') and 'share' for any other key.")
+
+
+def _resolve_scale(key, scale, stat='top', standardise=False):
+    """The scale of the per-sample tests: an explicit ``scale`` wins, otherwise 'log' for the cluster label."""
+    if scale is None:
+        scale = 'log' if key == 'clusters' and stat == 'top' else 'share'
+    if scale not in ('log', 'share'):
+        raise ValueError(f"scale must be 'log', 'share' or None, got {scale!r}. {SCALE_RULE}")
+    if scale == 'log' and stat != 'top':
+        raise ValueError("scale='log' needs stat='top' (counts of cells per category); use scale='share'.")
+    if scale == 'log' and standardise:
+        raise ValueError("standardise=True is defined on the share scale only; pass scale='share'. For the cluster "
+                         "label it is the composition itself (every unit gets the pooled composition), so leave "
+                         "standardise off there.")
+    return scale
 
 
 def _sample_test(gres, labels, samples, test, reference):
@@ -262,8 +303,8 @@ def _sample_test(gres, labels, samples, test, reference):
     A = _incidence(gres, np.asarray(gres.embedding['embedding']), gres.grids['condition_radius'])
     y = {}
     for name, ids in groups.items():
-        y[name] = np.column_stack([np.log2((np.asarray(A @ (samples == s).astype(float)) + .5)
-                                           / ((samples == s).sum() + 1)) for s in ids])
+        y[name] = np.column_stack([_log_share(np.asarray(A @ (samples == s).astype(float)), (samples == s).sum())
+                                   for s in ids])
     with np.errstate(invalid='ignore', divide='ignore'):
         p = stats.ttest_ind(y[test], y[reference], axis=1, equal_var=False).pvalue
     return np.where(np.isnan(p), 1.0, p)
@@ -659,7 +700,7 @@ def _check_selected(units, what):
             raise ValueError(f'The selection holds no cells of {what} {u!r}.')
 
 
-def shares_by_sample(gres, samples, key='fate_top', stat='top', within=None, standardise=False):
+def shares_by_sample(gres, samples, key='fate_top', stat='top', within=None, standardise=False, scale=None):
     """
     Share of each sample's cells in each category of a cell label (for example the heaviest lineage), or the
     mean of per-lineage values over each sample's cells.
@@ -692,29 +733,48 @@ def shares_by_sample(gres, samples, key='fate_top', stat='top', within=None, sta
         are listed in ``table.attrs['dropped_clusters']``. A cluster whose statistic is missing for every cell
         of a sample makes that sample's standardised value NaN.
         (Default: False)
+    scale
+        Scale of the tests across samples for ``stat='top'``: 'log' compares log2((count + 0.5) / (cells + 1))
+        of each sample (count: its cells in the category; cells: its cells in the comparison), 'share' compares
+        the shares. None means 'log' when ``key`` is the cluster label ('clusters') and 'share' for any other
+        key; an explicit value always wins. A difference of cluster shares is dominated by the large clusters
+        and by the samples with the most extreme composition; a ratio is not, so on the log scale a change in
+        one cluster is found that the share scale misses. The log scale is unsafe for a category with no cells
+        inside a selection whose size differs between conditions: its pseudo-counted log share then changes
+        with the selection size alone. Lineage labels within a selection meet that case, which is why they keep
+        the share scale. Differences and means stay in share units on either scale. 'log' needs
+        ``stat='top'`` and ``standardise=False`` (standardising is defined on the share scale, and for the
+        cluster label it is the composition itself).
+        (Default: None)
 
     Returns
     ----------
     DataFrame, one row per sample: ``condition`` and the statistic for each category (for ``stat='top'`` the
-    shares of a row sum to 1).
+    shares of a row sum to 1); with ``scale='log'`` also ``<category>_log2``, the values the log-scale tests
+    compare.
     """
     if 'conditions' not in gres.embedding:
         raise ValueError('No conditions on the grid: call project_conditions(gres, conditions) first.')
     samples, of = _sample_conditions(gres, samples)
+    scale = _resolve_scale(key, scale, stat, standardise)
     selected = _selection(gres, within)
     cells = np.flatnonzero(selected)
     V, cats = _statistic(gres, key, stat, cells)
     if 'condition' in cats:
         raise ValueError(f"gres.embedding[{key!r}] has a category named 'condition', which is the name of the "
                          f"column holding each sample's condition; rename that category.")
-    clash = [f'{c}_std' for c in cats if f'{c}_std' in cats] if standardise else []
+    added = ['_std'] if standardise else ['_log2'] if scale == 'log' else []
+    clash = [f'{c}{x}' for c in cats for x in added if f'{c}{x}' in cats]
     if clash:
-        raise ValueError(f'gres.embedding[{key!r}] has categories {clash}, which are also the names of the '
-                         f'standardised columns; rename those categories.')
+        raise ValueError(f'gres.embedding[{key!r}] has categories {clash}, which are also the names of added '
+                         f'columns; rename those categories.')
     units = {u: samples[cells] == u for u in of}
     _check_selected(units, 'sample')
     rows = {u: _group_mean(V[m]) for u, m in units.items()}
     table = pd.DataFrame.from_dict(rows, orient='index', columns=cats)
+    if scale == 'log':
+        for i, c in enumerate(cats):
+            table[f'{c}_log2'] = [_log_share(V[units[u], i].sum(), units[u].sum()) for u in table.index]
     if standardise:
         clusters = _cell_clusters(gres, 'standardise=True')[cells]
         kept, dropped = _kept_clusters(clusters, units)
@@ -765,7 +825,7 @@ def _blocks(gres, samples, of, pairs, test, reference):
 
 
 def compare_fates(gres, test, reference, key='fate_top', samples=None, n_permutations=2000, n_boot=500, seed=0,
-                  stat='top', within=None, standardise=False, pairs=None):
+                  stat='top', within=None, standardise=False, pairs=None, scale=None):
     """
     Compare a fate statistic between two conditions: the share of cells in each category of a cell label (for
     example the heaviest lineage), or the mean of per-lineage values (for example the lineage shares of
@@ -823,15 +883,30 @@ def compare_fates(gres, test, reference, key='fate_top', samples=None, n_permuta
         One block label per cell, or a dict sample -> block (needs ``samples``); each block holds exactly one
         sample of each condition. Adds a paired t-test across blocks.
         (Default: None)
+    scale
+        Scale of the tests across samples for ``stat='top'``: 'log' compares log2((count + 0.5) / (cells + 1))
+        of each sample (count: its cells in the category; cells: its cells in the comparison), 'share' compares
+        the shares. None means 'log' when ``key`` is the cluster label ('clusters') and 'share' for any other
+        key; an explicit value always wins. A difference of cluster shares is dominated by the large clusters
+        and by the samples with the most extreme composition; a ratio is not, so on the log scale a change in
+        one cluster is found that the share scale misses. The log scale is unsafe for a category with no cells
+        inside a selection whose size differs between conditions: its pseudo-counted log share then changes
+        with the selection size alone. Lineage labels within a selection meet that case, which is why they keep
+        the share scale. Differences and means stay in share units on either scale. 'log' needs
+        ``stat='top'`` and ``standardise=False`` (standardising is defined on the share scale, and for the
+        cluster label it is the composition itself).
+        (Default: None)
 
     Returns
     ----------
     DataFrame indexed by category: ``reference``, ``reference_low``, ``reference_high``, ``test``,
     ``test_low``, ``test_high`` (statistic with 95% bootstrap intervals), ``difference`` (test minus reference)
     and ``pvalue`` (two-sided, from permuting the condition labels). With ``samples`` also
-    ``reference_mean`` and ``test_mean`` (means over samples), ``difference_samples``, ``t``, ``df`` and
-    ``pvalue_samples`` (Welch t-test across samples; when the values vary in neither condition the p-value is
-    1 for equal and 0 for different means), and ``n_reference``, ``n_test`` (numbers of samples). With
+    ``reference_mean`` and ``test_mean`` (means over samples of the shares), ``difference_samples`` (in share
+    units), ``t``, ``df`` and ``pvalue_samples`` (Welch t-test across samples on the chosen ``scale``; when the
+    values vary in neither condition the p-value is 1 for equal and 0 for different means), ``n_reference``,
+    ``n_test`` (numbers of samples) and, with ``scale='log'``, ``log2fc_samples`` (mean over test samples minus
+    mean over reference samples of the log2 pseudo-counted shares). With
     ``standardise``: ``reference_std``, ``test_std``, ``difference_std`` (each unit, a sample when ``samples``
     is given and otherwise a condition, reweighted to the pooled cluster composition over the kept clusters,
     those present in every unit; the others are listed in ``table.attrs['dropped_clusters']``),
@@ -845,14 +920,15 @@ def compare_fates(gres, test, reference, key='fate_top', samples=None, n_permuta
     difference; they add up exactly to ``difference_kept``, which equals ``difference`` (or with ``samples``
     ``difference_samples``) when no cluster is dropped and the statistic has no missing values. A cluster whose
     statistic is missing for every cell of a unit makes the standardised values and the parts NaN. With
-    ``samples`` also ``pvalue_samples_std``. With ``pairs``: ``pvalue_paired`` and, with ``standardise``,
-    ``pvalue_paired_std`` (paired t-test across blocks).
+    ``samples`` also ``pvalue_samples_std``. With ``pairs``: ``pvalue_paired`` (paired t-test across blocks on
+    the chosen ``scale``) and, with ``standardise``, ``pvalue_paired_std``.
     """
     labels = _conditions(gres, test, reference)
     if stat == 'top' and key not in gres.embedding:
         raise KeyError(_missing_key(gres, key))
     if pairs is not None and samples is None:
         raise ValueError('pairs needs samples.')
+    scale = _resolve_scale(key, scale, stat, standardise)
     selected = _selection(gres, within)
     pool = np.flatnonzero(((labels == test) | (labels == reference)) & selected)
     C, cats = _statistic(gres, key, stat, pool)
@@ -886,14 +962,21 @@ def compare_fates(gres, test, reference, key='fate_top', samples=None, n_permuta
         per_sample = {u: mean(C[m]) for u, m in units.items()}
         a = np.array([per_sample[u] for u in units if of[u] == test])
         b = np.array([per_sample[u] for u in units if of[u] == reference])
-        t, df, p = _welch(a, b)
+        tested = per_sample
+        if scale == 'log':
+            tested = {u: _log_share(C[m].sum(0), m.sum()) for u, m in units.items()}
+        ya = np.array([tested[u] for u in units if of[u] == test])
+        yb = np.array([tested[u] for u in units if of[u] == reference])
+        t, df, p = _welch(ya, yb)
         table['reference_mean'], table['test_mean'] = b.mean(0), a.mean(0)
         table['difference_samples'], table['t'], table['df'], table['pvalue_samples'] = a.mean(0) - b.mean(0), t, df, p
         table['n_reference'], table['n_test'] = len(b), len(a)
+        if scale == 'log':
+            table['log2fc_samples'] = ya.mean(0) - yb.mean(0)
         if pairs is not None:
             matched = _blocks(gres, sample_of, of, pairs, test, reference)
-            table['pvalue_paired'] = _paired(np.array([per_sample[x] for x, _ in matched]),
-                                             np.array([per_sample[y] for _, y in matched]))
+            table['pvalue_paired'] = _paired(np.array([tested[x] for x, _ in matched]),
+                                             np.array([tested[y] for _, y in matched]))
     if standardise:
         clusters = _cell_clusters(gres, 'standardise=True')[pool]
         if samples is None:

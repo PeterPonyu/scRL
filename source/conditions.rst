@@ -106,3 +106,22 @@ when clusters are projected, per cluster (the ``share_reference``, ``share_test`
 picture and these tables as the test. When the libraries form blocks (for example replicate A of each
 condition prepared together), give the blocks as ``pairs`` (a block label per cell, or a dict library ->
 block) to add a paired test across blocks.
+
+Scale of the tests across samples
+---------------------------------
+
+The tests across samples compare cluster shares on a log scale by default. For each library and cluster
+they take log2((count + 0.5) / (cells + 1)), with count the library's cells in the cluster and cells its
+cells in the comparison (the same transform as the grid-point test), and compare these values with a Welch
+t-test, or with a paired t-test across ``pairs``. A difference of shares is dominated by the large clusters
+and by the libraries with the most extreme composition; a ratio is not, so a cluster that loses part of its
+cells is found on the log scale where a difference of shares can miss it. The tables also give
+``log2fc_samples``, the mean difference of these log2 values; differences and means stay in share units.
+
+``scale`` sets this: 'log', 'share', or None (the default), which means 'log' when the category is the
+cluster label (``compare_abundance``, or ``key='clusters'`` in ``compare_fates`` and ``shares_by_sample``)
+and 'share' for any other key; an explicit value always wins. Lineage labels keep the share scale because
+the log scale is unsafe for a category with no cells inside a selection whose size differs between
+conditions: its pseudo-counted log share then changes with the selection size alone. The log scale needs
+``stat='top'``, and ``standardise=True`` needs the share scale (for the cluster label, standardising by
+cluster gives every library the pooled composition, so there is nothing left to compare).

@@ -326,8 +326,8 @@ def test_cluster_qvalues_include_separated_clusters():
     a_cells = np.flatnonzero(conditions == 'A')
     samples[a_cells] = [f'A{i}' for i in rng.integers(3, size=len(a_cells))]
     scRL.project_conditions(gres, conditions)
-    scRL.compare_abundance(gres, 'A', 'B', samples=samples.astype(str), n_shuffles=2)
-    table = gres.grids['abundance_clusters']
+    scRL.compare_abundance(gres, 'A', 'B', samples=samples.astype(str), n_shuffles=2, scale='share')
+    table = gres.grids['abundance_clusters']                              # equal shares in every B sample
     assert table.loc['branchB', 'pvalue_samples'] == 0 and np.isfinite(table['qvalue_samples']).all()
     assert table.loc['branchB', 'qvalue_samples'] == 0
 
@@ -578,3 +578,141 @@ def test_fate_comparisons_default_to_the_walk():
     gres.embedding['fate_top'] = np.where(labels == 'root', 'A', 'B')
     with pytest.raises(ValueError, match="key='fate'"):
         scRL.compare_fates(gres, 'A', 'B', stat='mean')
+
+
+def _counts_case(counts, key='clusters'):
+    """Cells from a table of counts: {(sample, condition, category): n}; categories as clusters or another key."""
+    from scRL.GridCore import Grids_Results
+    rows = [(s, c, k) for (s, c, k), n in counts.items() for _ in range(n)]
+    samples, conditions, cats = (np.array(x) for x in zip(*rows))
+    g = Grids_Results()
+    g.embedding['embedding'] = np.random.default_rng(0).random((len(rows), 3))
+    g.embedding['conditions'] = conditions
+    if key == 'clusters':
+        g.embedding['clusters'] = pd.Series(pd.Categorical(cats))
+    else:
+        g.embedding['clusters'] = pd.Series(pd.Categorical(['c'] * len(rows)))
+        g.embedding[key] = cats
+    return g, samples
+
+
+def _halved_cluster_counts():
+    """Four blocks; in the test condition the large cluster c1 keeps half its cells, the others are unchanged."""
+    rng = np.random.default_rng(3)
+    counts = {}
+    for b in range(4):
+        base = {'c1': 400, 'c2': 100, 'c3': 100, 'c4': 100}
+        size = rng.uniform(.6, 1.6)                                        # block effect on every cluster
+        for cond, tag in (('ref', 'R'), ('test', 'T')):
+            for k, n in base.items():
+                m = n * size * rng.uniform(.9, 1.1)
+                counts[(f'{tag}{b}', cond, k)] = int(round(m / 2 if (cond == 'test' and k == 'c1') else m))
+    return counts
+
+
+def _transformed(counts, cond, tag, cats, log):
+    out = []
+    for b in range(4):
+        n = np.array([counts[(f'{tag}{b}', cond, k)] for k in cats], dtype=float)
+        out.append(np.log2((n + .5) / (n.sum() + 1)) if log else n / n.sum())
+    return np.array(out)
+
+
+def test_scale_default_rule():
+    import inspect
+    for f in (scRL.compare_fates, scRL.shares_by_sample, scRL.compare_abundance):
+        assert inspect.signature(f).parameters['scale'].default is None
+    counts = _halved_cluster_counts()
+    g, samples = _counts_case(counts)
+    run = lambda **kw: scRL.compare_fates(g, 'test', 'ref', samples=samples, n_permutations=10, n_boot=10, **kw)
+    assert 'log2fc_samples' in run(key='clusters').columns                # cluster label: log
+    assert 'log2fc_samples' not in run(key='clusters', scale='share').columns
+    gl, samples_l = _counts_case(counts, key='lineage')
+    lin = scRL.compare_fates(gl, 'test', 'ref', key='lineage', samples=samples_l, n_permutations=10, n_boot=10)
+    assert 'log2fc_samples' not in lin.columns                            # any other key: share
+    assert 'log2fc_samples' in scRL.compare_fates(gl, 'test', 'ref', key='lineage', samples=samples_l, scale='log',
+                                                  n_permutations=10, n_boot=10).columns
+    assert 'c1_log2' in scRL.shares_by_sample(g, samples, key='clusters').columns
+    with pytest.raises(ValueError, match='scale'):
+        run(key='clusters', scale='ratio')
+    with pytest.raises(ValueError, match='standardise'):
+        run(key='clusters', standardise=True)
+    with pytest.raises(ValueError, match="stat='top'"):
+        scRL.shares_by_sample(gl, samples_l, key='lineage', stat='mean', scale='log')
+
+
+def test_halved_large_cluster_on_both_scales():
+    from scipy import stats
+    counts = _halved_cluster_counts()
+    g, samples = _counts_case(counts)
+    blocks = {f'{t}{b}': f'block{b}' for b in range(4) for t in 'RT'}
+    cats = ['c1', 'c2', 'c3', 'c4']
+    out = {}
+    for scale in ('log', 'share'):
+        t = scRL.compare_fates(g, 'test', 'ref', key='clusters', samples=samples, pairs=blocks, scale=scale,
+                               n_permutations=10, n_boot=10)
+        yt, yr = (_transformed(counts, c, tag, cats, scale == 'log') for c, tag in (('test', 'T'), ('ref', 'R')))
+        np.testing.assert_allclose(t.loc[cats, 'pvalue_paired'], stats.ttest_rel(yt, yr).pvalue, rtol=1e-10)
+        np.testing.assert_allclose(t.loc[cats, 'pvalue_samples'],
+                                   stats.ttest_ind(yt, yr, equal_var=False).pvalue, rtol=1e-10)
+        st, sr = (_transformed(counts, c, tag, cats, False) for c, tag in (('test', 'T'), ('ref', 'R')))
+        np.testing.assert_allclose(t.loc[cats, 'difference_samples'], st.mean(0) - sr.mean(0), atol=1e-12)
+        if scale == 'log':
+            np.testing.assert_allclose(t.loc[cats, 'log2fc_samples'], yt.mean(0) - yr.mean(0), atol=1e-12)
+        out[scale] = t
+    log = out['log']
+    assert log.loc['c1', 'pvalue_paired'] < .001                           # the halved cluster is called
+    assert -.6 < log.loc['c1', 'log2fc_samples'] < -.4                     # share 4/7 -> 2/5
+
+
+def test_share_scale_reproduces_the_previous_results():
+    gres, labels, conditions, samples = _samples_setup(True)
+    for s in (None, samples):
+        pd.testing.assert_frame_equal(
+            scRL.compare_fates(gres, 'A', 'B', key='clusters', samples=s, scale='share', n_permutations=200,
+                               n_boot=50),
+            _old_compare_fates(gres, 'A', 'B', 'clusters', s, 200, 50))
+    from scRL.ConditionCore import _welch
+    scRL.compare_abundance(gres, 'A', 'B', samples=samples, n_shuffles=3, scale='share')
+    table = gres.grids['abundance_clusters']
+    shares = {s: [np.mean(labels[samples == s] == c) for c in table.index] for s in sorted(set(samples))}
+    p = _welch(np.array([shares[s] for s in shares if s[0] == 'A']),
+               np.array([shares[s] for s in shares if s[0] == 'B']))[2]
+    assert np.array_equal(table['pvalue_samples'].to_numpy(), p)
+
+
+def test_log_scale_under_the_null():
+    from scipy import stats
+    gres, labels, conditions, samples = _samples_setup(False)
+    t = scRL.compare_fates(gres, 'A', 'B', key='clusters', samples=samples, n_permutations=10, n_boot=10)
+    cats = list(t.index)
+    y = {s: np.log2((np.array([np.sum(labels[samples == s] == c) for c in cats]) + .5) / ((samples == s).sum() + 1))
+         for s in sorted(set(samples))}
+    a = np.array([y[s] for s in y if s[0] == 'A'])
+    b = np.array([y[s] for s in y if s[0] == 'B'])
+    np.testing.assert_allclose(t['pvalue_samples'], stats.ttest_ind(a, b, equal_var=False).pvalue, rtol=1e-10)
+    assert np.median(t['pvalue_samples']) > .1
+    scRL.compare_abundance(gres, 'A', 'B', samples=samples, n_shuffles=3)
+    table = gres.grids['abundance_clusters']
+    np.testing.assert_allclose(table.loc[cats, 'pvalue_samples'], t['pvalue_samples'], rtol=1e-12)
+    np.testing.assert_allclose(table.loc[cats, 'log2fc_samples'], a.mean(0) - b.mean(0), atol=1e-12)
+
+
+def test_log_scale_with_a_category_missing_from_some_samples():
+    """Explicit scale='log' on a lineage key: a category with no cells in a sample gets the pseudo-count value,
+    which moves with the sample's size alone; a category with no cells in the comparison is not tested."""
+    from scipy import stats
+    counts = {}
+    for i, n in enumerate((80, 120, 100)):
+        counts[(f'R{i}', 'ref', 'X')] = 5
+        counts[(f'R{i}', 'ref', 'Y')] = n
+        counts[(f'T{i}', 'test', 'Y')] = n // 2                           # no X cells, smaller selections
+    g, samples = _counts_case(counts, key='lineage')
+    t = scRL.compare_fates(g, 'test', 'ref', key='lineage', samples=samples, scale='log', n_permutations=10,
+                           n_boot=10)
+    assert list(t.index) == ['X', 'Y']
+    yt = np.log2((np.array([0, 0, 0]) + .5) / (np.array([40, 60, 50]) + 1))
+    yr = np.log2((np.array([5, 5, 5]) + .5) / (np.array([85, 125, 105]) + 1))
+    assert t.loc['X', 'log2fc_samples'] == pytest.approx(yt.mean() - yr.mean())
+    assert t.loc['X', 'pvalue_samples'] == pytest.approx(stats.ttest_ind(yt, yr, equal_var=False).pvalue)
+    assert t.loc['X', 'difference_samples'] == pytest.approx(-np.mean(5 / np.array([85, 125, 105])))
