@@ -119,3 +119,4 @@ cython_debug/
 examples/grid3d_decision.png
 # Figures written by examples/grid3d_walkthrough.py
 grid3d_walkthrough_output/
+.Rhistory

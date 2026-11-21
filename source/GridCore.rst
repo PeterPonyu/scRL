@@ -25,6 +25,10 @@ GridCore
     scRL.PlotCore.plot_fates
     scRL.PlotCore.plot_conditions
     scRL.ExactCore.exact_values
+    scRL.ExactCore.exact_trajectories
+    scRL.PlotCore.plot_trajectories
+    scRL.PlotCore.plot_mesh
+    scRL.PlotCore.plot_voxels
     scRL.FateCore.fate_gate
     scRL.FateCore.fate_probabilities
     scRL.FateCore.fate_over_runs

@@ -14,7 +14,7 @@ public data set that scanpy loads with ``scanpy.datasets.paul15``; a copy ships 
 
 UMAP coordinates depend on the numerical libraries and the processor, so they are not guaranteed to be
 the same on another machine. The 3-D coordinates of the run behind the expected results therefore ship
-with the package, together with the cluster labels and the six log-normalised marker genes the walkthrough
+with the repository (in ``examples/expected/``; they are not part of the wheel installed by pip), together with the cluster labels and the six log-normalised marker genes the walkthrough
 uses (``examples/expected/grid3d_walkthrough_inputs.npz``, about 60 kB). The check starts from these
 coordinates, so it does not depend on UMAP.
 
