@@ -1076,8 +1076,12 @@ def design_effect(values, samples, alpha=0.05, scale='rank'):
     and 0 when ``c**2 >= k - 1``. It tends to the normal form as the number of samples grows. On designs of
     four to eleven animals the few-sample form was closer to the observed rate of a cell-level rank-sum test
     than the normal form, which ran low there; that check is an indication only, and neither form is a
-    calibrated estimate. With few samples and a design effect near 1 the few-sample form falls below ``alpha``
-    (to 0 for four samples at ``alpha`` 0.05), where the normal form gives ``alpha``.
+    calibrated estimate. The two forms answer different questions. The few-sample form is for a correlation
+    estimated from the same ``k`` samples, as here: the spread between the samples is then itself estimated from
+    few samples, which is why the reference is t and not normal, and the rate it gives is the one over divisions
+    of the samples in hand. For a correlation known from elsewhere, as when a study is planned, the normal form
+    applies. Near a design effect of 1 neither form is accurate, because a negative estimate of the correlation
+    is set to zero; there the few-sample form can fall below ``alpha`` (to 0 for four samples at ``alpha`` 0.05).
 
     Parameters
     ----------
@@ -1326,9 +1330,10 @@ def compare_readout(values, samples, groups, test='auto', alpha=0.05, n_relabel=
     of that size cannot be checked, and the relabelling test cannot reject at 0.05 there (its smallest attainable
     p-value is 0.1). With seven or eight samples in all: the pooled t-test (the default) or the mixed model. With
     nine or more: the relabelling test as well. When the numbers of cells per sample differ several-fold between
-    the conditions: the Welch t-test, the mixed model, or the relabelling test (eight or more samples); the
-    pooled t-test rejected too often with a tenfold difference, and it warns when the ratio is at least 3 (see
-    ``cells_per_sample_ratio`` below) without being replaced. The pooled t-test is the default because it kept
+    the conditions: the Welch t-test, the mixed model, or, from nine samples, the relabelling test; the pooled
+    t-test rejected too often with a tenfold difference, most when the condition with fewer cells per sample
+    also had fewer samples, and it warns when the ratio is at least 3 (see ``cells_per_sample_ratio`` below)
+    without being replaced. Such a difference was not examined with fewer than seven samples. The pooled t-test is the default because it kept
     close to its nominal level in the settings examined with similar numbers of cells per sample, which are
     those designs and no others. No claim is made that any test is best in general.
 
@@ -1396,7 +1401,8 @@ def compare_readout(values, samples, groups, test='auto', alpha=0.05, n_relabel=
     if run == 'pooled' and ratio >= 3:
         warnings.warn(f'Cells per sample differ about {ratio:.0f}-fold between the conditions (means '
                       f'{per_sample[0]:.3g} and {per_sample[1]:.3g}). The pooled t-test on sample means rejected '
-                      "too often with a tenfold difference; test='welch' and test='mixed' held their level there.",
+                      'too often with a tenfold difference, most when the condition with fewer cells per sample '
+                      "also had fewer samples; test='welch' and test='mixed' held their level there.",
                       UserWarning)
     single = sizes.max() == 1                        # one value per sample: no within-sample spread to describe
     if single and run in ('mixed', 'cells'):
