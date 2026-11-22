@@ -157,7 +157,6 @@ def test_shares_are_a_valid_table(g3):
 def test_outside_flags(name, request):
     gres = request.getfixturevalue(name)
     X = gres.embedding['embedding']
-    d = X.shape[1]
     pts = gres.grids['grids']
     step = np.ptp(pts, axis=0) / (gres.grids['n'] - 1) if name == 'g2' else gres.grids['spacing']
     far = X.max(0) + 10 * step
@@ -168,6 +167,34 @@ def test_outside_flags(name, request):
     assert out.all() and np.isfinite(v).all()
     _, own = scRL.project_cells(gres, X)
     assert own.mean() < 0.01
+
+
+@pytest.mark.parametrize('name', ['g3', 'g2'])
+def test_outside_uses_the_grid_step(name, request):
+    """0.9 steps beyond the outermost kept point along the first axis is inside, 1.1 steps is outside."""
+    gres = request.getfixturevalue(name)
+    pts = gres.grids['grids']
+    kept = pts[np.asarray(gres.grids['mapped_grids'])]
+    step = np.ptp(pts, axis=0) / (gres.grids['n'] - 1) if name == 'g2' else np.asarray(gres.grids['spacing'])
+    edge = kept[kept[:, 0].argmax()]
+    near, far = edge.copy(), edge.copy()
+    near[0] += 0.9 * step[0]
+    far[0] += 1.1 * step[0]
+    _, out = scRL.project_cells(gres, np.vstack([near, far]), key='pseudotime')
+    assert out.tolist() == [False, True]
+
+
+def test_keys_that_hold_no_numbers_are_refused_by_name(g3):
+    for key in ('fate_top', 'fate_top_colors'):
+        if key in g3.grids:
+            with pytest.raises(ValueError, match=key):
+                scRL.project_cells(g3, g3.embedding['embedding'][:3], key=key)
+
+
+def test_arriving_share_can_be_read_beside_the_shares(g3):
+    """'fate_reached' is the share of walks that arrive anywhere; it is a plain vector key."""
+    reached, _ = scRL.project_cells(g3, g3.embedding['embedding'], key='fate_reached')
+    assert reached.ndim == 1 and np.nanmin(reached) >= 0 and np.nanmax(reached) <= 1 + 1e-9
 
 
 def test_max_distance_is_monotone(g3):
@@ -222,7 +249,10 @@ def _agreement(seed):
     Yq = scRL.place_cells(Z[ref], X[ref], Z[qry], neighbors=10)
     S, _ = scRL.project_cells(part, Yq)
     want = _own_shares(full)[qry]
-    return float((S.to_numpy().argmax(1) == want.argmax(1)).mean())
+    got = S.to_numpy()
+    ok = np.isfinite(got).all(1) & np.isfinite(want).all(1)
+    assert ok.mean() > 0.95
+    return float((got[ok].argmax(1) == want[ok].argmax(1)).mean())
 
 
 def test_held_out_cells_keep_their_top_lineage():

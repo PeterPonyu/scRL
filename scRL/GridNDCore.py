@@ -408,7 +408,9 @@ def place_cells(reference, embedding, query, neighbors=10):
     The nearest reference cells are sought in ``reference``, the representation in which cells are compared (for
     example principal components), and their coordinates in ``embedding`` are averaged. The positions can be
     given to ``project_cells`` to read a grid built from the reference cells for cells that were not used to
-    build it.
+    build it. This assumes that the new cells come from the same kind of population as the reference cells; a
+    cell unlike any reference cell is still placed among its nearest ones. Because coordinates are averaged,
+    new cells at the edge of the reference are drawn slightly towards its interior.
 
     Parameters
     ----------
@@ -459,8 +461,10 @@ def project_cells(gres, positions, key='fate', neighbors=15, max_distance=1.0):
     ``'fate'`` of ``fate_probabilities``) the means are then treated as the package treats its own cells: clipped
     to [0, 1], rows that sum to more than 1 rescaled, and each row divided by its sum (the share of arriving
     walks), so that the rows of the result are shares of the listed lineages. A cell whose row sums to 0 gets
-    NaN. Positions in the embedding of the cells the grid was built from
-    are given by ``place_cells``.
+    NaN: its neighbouring grid points reach none of the listed lineages. The division hides how many walks
+    arrive at all; ``project_cells(gres, positions, key='fate_reached')`` gives that share, which the package
+    uses to mark its own cells as reaching no lineage. Where the kernel has no width, the grid points get equal
+    weight. Positions of new cells in the embedding the grid was built from are given by ``place_cells``.
 
     A cell that lies outside the grid still receives values, from the nearest kept grid points at its edge. Such
     values are an extrapolation: check the cells flagged in ``outside`` or drop them.
@@ -474,7 +478,8 @@ def project_cells(gres, positions, key='fate', neighbors=15, max_distance=1.0):
     key
         A key of the grid holding either a table (DataFrame, kept grid points x lineages, as written by
         ``fate_probabilities``) or one value per kept grid point (as ``project_back`` accepts, for example
-        ``'pseudotime'``).
+        ``'pseudotime'``). A table is always read as lineage shares and its rows are rescaled as described
+        above; for any other table, pass its columns one at a time as values per grid point.
         (Default: 'fate')
     neighbors
         Number of nearest kept grid points in the kernel.
@@ -509,11 +514,17 @@ def project_cells(gres, positions, key='fate', neighbors=15, max_distance=1.0):
             raise ValueError(f'gres.grids[{key!r}] has {len(stored)} rows but the grid has {len(mapped)} points.')
         if set(stored.index) == set(mapped):
             stored = stored.loc[mapped]
-        table, columns = stored.to_numpy(dtype=float), list(stored.columns)
+        try:
+            table, columns = stored.to_numpy(dtype=float), list(stored.columns)
+        except (TypeError, ValueError):
+            raise ValueError(f'gres.grids[{key!r}] does not hold numbers and cannot be projected.') from None
     else:
         if isinstance(stored, pd.Series) and len(stored) == len(mapped) and set(stored.index) == set(mapped):
             stored = stored.loc[mapped]
-        table, columns = np.asarray(stored, dtype=float), None
+        try:
+            table, columns = np.asarray(stored, dtype=float), None
+        except (TypeError, ValueError):
+            raise ValueError(f'gres.grids[{key!r}] does not hold numbers and cannot be projected.') from None
         if table.ndim != 1 or len(table) != len(mapped):
             raise ValueError(f'gres.grids[{key!r}] must hold one value per kept grid point ({len(mapped)}) or a '
                              f'table of them.')
