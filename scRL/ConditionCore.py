@@ -1398,8 +1398,8 @@ def compare_readout(values, samples, groups, test='auto', alpha=0.05, n_relabel=
     on the scale on which each sample is summarised, not on the test. With several-fold fewer cells per sample in
     the condition that also has fewer samples, the pooled t-test rejected too often on every scale (0.064 to 0.066
     at level 0.05 with a tenfold difference), so ``'pooled'``, asked for by name, warns when the ratio is at least
-    3; the Welch t-test held there (0.051 on raw means and on mean ranks, the two scales on which it was run; it
-    was not run on normal scores). With two samples against five no t-test held under such a difference, and the
+    3; the Welch t-test held there (0.051 on raw means and on mean ranks, 0.052 on normal scores). With two
+    samples against five no t-test held under such a difference, and the
     Welch t-test rejects too often there even for independent normal sample means (0.065). Such a difference was
     not examined with fewer than seven samples. With three samples per condition the false-positive rate of the
     pooled t-test, averaged over many sets of six animals, was 0.049 on normal scores and 0.045 on raw means; a
