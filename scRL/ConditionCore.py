@@ -1237,6 +1237,11 @@ def _positive_int(value, name):
         raise ValueError(f'{name} must be a positive integer, not {value!r}.')
 
 
+def _normal_scores(ranks, n):
+    """Normal scores of average ranks among n values: the standard normal quantile of (rank - 0.5) / n."""
+    return stats.norm.ppf((ranks - 0.5) / n)
+
+
 def _means_t_test(m1, m2, equal_var=True):
     """Two-sample t-test on per-sample means, refused when they vary in neither condition."""
     if np.ptp(m1) == 0 and np.ptp(m2) == 0:
@@ -1307,8 +1312,7 @@ def _mixed_test(ranks, codes, side_of_sample, max_cells, seed):
     except ImportError as err:
         raise ImportError("test='mixed' needs the package statsmodels, which is not installed; install it or use "
                           "test='pooled'.") from err
-    N = len(ranks)
-    scores = stats.norm.ppf((ranks - 0.5) / N)
+    scores = _normal_scores(ranks, len(ranks))
     rng = np.random.default_rng(seed)
     rows = []
     for c in range(len(side_of_sample)):
@@ -1334,15 +1338,17 @@ def _mixed_test(ranks, codes, side_of_sample, max_cells, seed):
     return float(res.statistic), True
 
 
-def compare_readout(values, samples, groups, test='auto', alpha=0.05, n_relabel=2000, max_cells=300, seed=0):
+def compare_readout(values, samples, groups, test='auto', alpha=0.05, n_relabel=2000, max_cells=300, seed=0,
+                    scale='normal'):
     """
     Compare a per-cell readout between two conditions with the sample (animal, donor) as the unit.
 
     Cells from one sample resemble each other, so a test over cells overstates how much evidence a handful of
     animals gives (see ``design_effect``). The tests here take the sample as the unit:
 
-    - ``'pooled'``: the two-sample t-test with pooled variance on the per-sample means of the readout.
-    - ``'welch'``: the Welch t-test (unequal variances) on the per-sample means.
+    - ``'pooled'``: the two-sample t-test with pooled variance on the per-sample means of the readout, taken on
+      the scale named in ``scale`` (normal scores by default; see below).
+    - ``'welch'``: the Welch t-test (unequal variances) on the same per-sample means.
     - ``'relabel'``: the Welch t statistic of the two conditions' sample mean ranks (average ranks over all kept
       cells, then the mean rank of each sample, every sample counting once whatever its number of cells),
       referred to the distribution of the same statistic obtained by relabelling whole samples between the
@@ -1367,24 +1373,45 @@ def compare_readout(values, samples, groups, test='auto', alpha=0.05, n_relabel=
       called with the conditions: with ``groups`` the correlation is estimated within conditions, as it must be
       when the conditions may differ).
     - ``'auto'``: the pooled t-test, or the Welch t-test when the numbers of cells per sample differ at least
-      threefold between the conditions (the first of ``suitable_tests``).
+      threefold between the conditions (the first of ``suitable_tests``), on the scale named in ``scale``.
 
-    Guidance on the number of samples (all conditions together). It comes from planted shifts on a limited number
-    of designs and is not a statement about every design. With three samples per condition, the false-positive
-    rate of the pooled t-test on sample means, averaged over many sets of six animals, was 0.045; a single design
-    of that size cannot be checked, and the relabelling test cannot reject at 0.05 there (its smallest attainable
-    p-value is 0.1). With seven or eight samples in all: the pooled t-test (the default) or the mixed model. With
-    nine or more: the relabelling test as well. When the numbers of cells per sample differ several-fold between
-    the conditions: the Welch t-test, the mixed model, or, from nine samples, the relabelling test; the pooled
-    t-test rejected too often with a tenfold difference, most when the condition with fewer cells per sample
-    also had fewer samples, so ``'auto'`` runs the Welch t-test when the ratio is at least 3 (see
-    ``cells_per_sample_ratio`` below) and ``'pooled'``, asked for by name, warns there. Such a difference was
-    not examined with fewer than seven samples. The pooled t-test is the default otherwise because it kept close
-    to its nominal level in the settings examined with similar numbers of cells per sample, which are those
-    designs and no others. No claim is made that any test is best in general.
+    The scale on which each sample is summarised (``scale``). For ``'pooled'`` and ``'welch'``, and so for
+    ``'auto'``, the summary of a sample is the unweighted mean, over its cells, of
+
+    - ``'raw'``: the readout itself. This gives the classical t-test on sample means.
+    - ``'rank'``: the ranks of the readout among all kept cells (tied cells share their average rank).
+    - ``'normal'``: the normal scores of those ranks, the standard normal quantile of (rank - 0.5) / N with N the
+      number of kept cells. These are the scores the mixed model is fitted to.
+
+    ``'normal'`` is the default because, on planted shifts, the t-test on the samples' mean normal scores had the
+    power of the mixed model, and more than the t-test on raw means when whole samples shift (median power 0.68
+    against 0.40 with seven or eight samples; no loss when part of the cells shift), with the same false-positive
+    rate. This gain was measured on planted shifts sized on the raw scale and is not promised for a real
+    difference. ``'relabel'``, ``'mixed'`` and ``'cells'`` ignore ``scale``.
+
+    Guidance. It comes from planted shifts on a limited number of designs and is not a statement about every
+    design. The one recommendation: normal scores of the readout, their mean per sample, and the pooled t-test on
+    those means; the Welch t-test in its place when the numbers of cells per sample differ at least threefold
+    between the conditions (see ``cells_per_sample_ratio`` below), which is what ``'auto'`` does; report
+    ``estimate`` beside the test; and avoid conditions with two samples. With similar numbers of cells per sample,
+    every sample-level test examined kept its false-positive rate on average over designs, and the power depended
+    on the scale on which each sample is summarised, not on the test. With several-fold fewer cells per sample in
+    the condition that also has fewer samples, the pooled t-test rejected too often on every scale (0.064 to 0.066
+    at level 0.05 with a tenfold difference), so ``'pooled'``, asked for by name, warns when the ratio is at least
+    3; the Welch t-test held there (0.051 on raw means and on mean ranks, the two scales on which it was run; it
+    was not run on normal scores). With two samples against five no t-test held under such a difference, and the
+    Welch t-test rejects too often there even for independent normal sample means (0.065). Such a difference was
+    not examined with fewer than seven samples. With three samples per condition the false-positive rate of the
+    pooled t-test, averaged over many sets of six animals, was 0.049 on normal scores and 0.045 on raw means; a
+    single design of that size cannot be checked, and the relabelling test cannot reject at 0.05 there (its
+    smallest attainable p-value is 0.1). The mixed model, from seven samples in all, and the relabelling test,
+    from nine, are the further tests named in ``suitable_tests``; neither had more power than the recommendation
+    in the settings examined, which are those designs and no others. No claim is made that any test is best in
+    general.
 
     One value per sample (per-sample summaries, one row per animal) is accepted by ``'pooled'``, ``'welch'`` and
-    ``'relabel'``; ``'mixed'`` and ``'cells'`` need more than one cell per sample.
+    ``'relabel'``; the ranks and normal scores are then taken over the samples' values. ``'mixed'`` and
+    ``'cells'`` need more than one cell per sample.
 
     Parameters
     ----------
@@ -1409,13 +1436,20 @@ def compare_readout(values, samples, groups, test='auto', alpha=0.05, n_relabel=
         Cells per sample used by the mixed model; a positive integer. (Default: 300)
     seed
         Seed of the random relabellings and of the cell subsets of the mixed model. (Default: 0)
+    scale
+        'normal', 'rank' or 'raw': the scale on which each sample is summarised for the pooled and Welch
+        t-tests, as described above. The other tests ignore it. (Default: 'normal')
 
     Returns
     ----------
-    A plain ``dict`` with ``test`` (the one run), ``statistic``, ``p_value`` (two-sided), ``df`` (None where it
-    does not apply), ``estimate`` (the difference of the per-sample means, condition 1 minus condition 2, on the
-    readout's own scale, for every test), ``condition_1`` and ``condition_2``, ``n_samples`` and ``n_cells`` (a
-    tuple per condition), ``n_dropped`` (cells left out for a missing value, sample or group),
+    A plain ``dict`` with ``test`` (the one run), ``scale`` (the scale of that test; None for the tests that
+    ignore ``scale``), ``statistic`` and ``p_value`` (two-sided; both on that scale), ``df`` (None where it does
+    not apply), ``estimate`` (the difference of the per-sample means of the readout, condition 1 minus condition
+    2, for every test; always on the readout's own scale, so that the size of the difference can be read; the
+    test is on the scale named in ``scale``), ``estimate_scaled`` (the same difference of the per-sample means on
+    the scale of the test; equal to ``estimate`` for ``'raw'``; None for the tests that ignore ``scale``),
+    ``condition_1`` and ``condition_2``, ``n_samples`` and ``n_cells`` (a tuple per condition), ``n_dropped``
+    (cells left out for a missing value, sample or group),
     ``cells_per_sample_ratio`` (the larger over the smaller of the two conditions' mean numbers of cells per
     sample, at least 1), ``suitable_tests`` (the tests the guidance above names for this number of samples, with
     ``'welch'`` in place of ``'pooled'`` when ``cells_per_sample_ratio`` is at least 3; it repeats that guidance
@@ -1428,6 +1462,9 @@ def compare_readout(values, samples, groups, test='auto', alpha=0.05, n_relabel=
     tests = ('auto', 'pooled', 'welch', 'relabel', 'mixed', 'cells')
     if test not in tests:
         raise ValueError(f'test must be one of {tests}, not {test!r}.')
+    scales = ('normal', 'rank', 'raw')
+    if scale not in scales:
+        raise ValueError(f'scale must be one of {scales}, not {scale!r}.')
     if not 0 < alpha < 1:
         raise ValueError(f'alpha must lie between 0 and 1 (exclusive), not {alpha!r}.')
     _positive_int(n_relabel, 'n_relabel')
@@ -1455,11 +1492,15 @@ def compare_readout(values, samples, groups, test='auto', alpha=0.05, n_relabel=
         raise ValueError(f"test={run!r} needs more than one cell per sample; every sample has one value here. "
                          "Use 'pooled'.")
     deff = None if single else design_effect(x, codes, alpha=alpha, groups=side[codes])
-    df, smallest, fallback = None, None, False
+    df, smallest, fallback, used, scaled = None, None, False, None, None
     if run in ('pooled', 'welch'):
-        res = _means_t_test(m1, m2, equal_var=run == 'pooled')
+        z = x if scale == 'raw' else ranks if scale == 'rank' else _normal_scores(ranks, len(ranks))
+        z_means = np.bincount(codes, weights=z) / sizes
+        z1, z2 = z_means[side == 0], z_means[side == 1]
+        res = _means_t_test(z1, z2, equal_var=run == 'pooled')
         statistic, p = float(res.statistic), float(res.pvalue)
         df = float(res.df) if run == 'welch' else float(k - 2)
+        used, scaled = scale, float(z1.mean() - z2.mean())
     elif run == 'relabel':
         statistic, p, smallest = _relabel_test(ranks, codes, side, n_relabel, seed)
         if smallest > alpha:
@@ -1476,7 +1517,8 @@ def compare_readout(values, samples, groups, test='auto', alpha=0.05, n_relabel=
                       f"of these data its predicted false-positive rate at level {alpha} is "
                       f"{deff['predicted_false_call_rate']:.3g} when the conditions do not differ. "
                       "Use 'pooled' for inference.", UserWarning)
-    return {'test': run, 'statistic': statistic, 'p_value': p, 'df': df, 'estimate': float(m1.mean() - m2.mean()),
+    return {'test': run, 'scale': used, 'statistic': statistic, 'p_value': p, 'df': df,
+            'estimate': float(m1.mean() - m2.mean()), 'estimate_scaled': scaled,
             'condition_1': order[0], 'condition_2': order[1], 'n_samples': n_samples, 'n_cells': n_cells,
             'n_dropped': n_dropped, 'cells_per_sample_ratio': ratio, 'suitable_tests': _suitable_tests(k, ratio),
             'smallest_p': smallest,

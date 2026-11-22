@@ -32,6 +32,21 @@ def _clustered(k, cells, rho, rng, shift=0.0):
     return values, np.repeat(np.arange(k), cells), grp
 
 
+def _on_scale(values, scale):
+    """The readout on the named scale, written out here and not taken from the package: mid-ranks over all cells,
+    or the standard normal quantile of (rank - 0.5) / number of cells."""
+    values = np.asarray(values, dtype=float)
+    if scale == 'raw':
+        return values
+    ranks = stats.rankdata(values, method='average')
+    return ranks if scale == 'rank' else stats.norm.ppf((ranks - 0.5) / len(values))
+
+
+def _sample_means(z, samples):
+    """Unweighted mean per sample, in order of first appearance."""
+    return pd.Series(np.asarray(z, dtype=float)).groupby(np.asarray(samples), sort=False).mean().to_numpy()
+
+
 def _hand():
     # sample means 1, 2, 3 against 4, 5, 9
     samples = np.repeat(list('abcdef'), 2)
@@ -44,7 +59,7 @@ def _hand():
 @pytest.mark.parametrize('test, equal_var', [('pooled', True), ('welch', False)])
 def test_t_tests_match_scipy_on_sample_means(test, equal_var):
     values, samples, groups = _hand()
-    out = scRL.compare_readout(values, samples, groups, test=test)
+    out = scRL.compare_readout(values, samples, groups, test=test, scale='raw')
     ref = stats.ttest_ind([1, 2, 3], [4, 5, 9], equal_var=equal_var)
     assert out['test'] == test
     assert out['statistic'] == pytest.approx(ref.statistic)
@@ -65,7 +80,7 @@ def test_t_tests_use_unweighted_sample_means_with_unequal_cells(test, equal_var)
     expected = means[:3].mean() - means[3:].mean()
     assert abs(expected - (values[groups == 'a'].mean() - values[groups == 'b'].mean())) > 0.1
     ref = stats.ttest_ind(means[:3], means[3:], equal_var=equal_var)
-    out = scRL.compare_readout(values, samples, groups, test=test)
+    out = scRL.compare_readout(values, samples, groups, test=test, scale='raw')
     assert out['n_cells'] == (16, 16)
     assert out['estimate'] == pytest.approx(expected)
     assert out['statistic'] == pytest.approx(ref.statistic)
@@ -343,8 +358,11 @@ def test_auto_is_pooled_and_suitable_tests():
         v, s, g = _design(list(np.arange(k) * 0.3), cells=4, sd=1, seed=k)
         auto = scRL.compare_readout(v, s, g)
         pooled = scRL.compare_readout(v, s, g, test='pooled')
-        assert auto['test'] == 'pooled'
+        assert auto['test'] == 'pooled' and auto['scale'] == 'normal'
         assert auto['statistic'] == pooled['statistic'] and auto['p_value'] == pooled['p_value']
+        means = _sample_means(_on_scale(v, 'normal'), s)
+        ref = stats.ttest_ind(means[:k // 2], means[k // 2:])
+        assert auto['statistic'] == pytest.approx(ref.statistic) and auto['p_value'] == pytest.approx(ref.pvalue)
         assert auto['suitable_tests'] == expect
     assert 'mixed' not in scRL.compare_readout(*_design(list(range(6)), sd=1))['suitable_tests']
     assert 'relabel' not in scRL.compare_readout(*_design(list(range(8)), sd=1))['suitable_tests']
@@ -378,9 +396,14 @@ def test_auto_runs_welch_without_a_warning_when_cells_per_sample_differ_threefol
         with warnings.catch_warnings():
             warnings.simplefilter('error')
             out = scRL.compare_readout(values, samples, groups)
-        assert out['test'] == 'welch' and out['suitable_tests'][0] == 'welch'
+        assert out['test'] == 'welch' and out['suitable_tests'][0] == 'welch' and out['scale'] == 'normal'
+        means = _sample_means(_on_scale(values, 'normal'), samples)
+        ref = stats.ttest_ind(means[:4], means[4:], equal_var=False)
+        assert out['statistic'] == pytest.approx(ref.statistic) and out['p_value'] == pytest.approx(ref.pvalue)
+        raw = scRL.compare_readout(values, samples, groups, scale='raw')
         means = pd.Series(values).groupby(samples).mean().to_numpy()
-        assert out['p_value'] == pytest.approx(stats.ttest_ind(means[:4], means[4:], equal_var=False).pvalue)
+        assert raw['test'] == 'welch' and raw['scale'] == 'raw'
+        assert raw['p_value'] == pytest.approx(stats.ttest_ind(means[:4], means[4:], equal_var=False).pvalue)
     values, samples, groups = _uneven(8, 29, 10)          # below threefold: the pooled t-test
     assert scRL.compare_readout(values, samples, groups)['test'] == 'pooled'
 
@@ -389,7 +412,7 @@ def test_auto_runs_welch_without_a_warning_when_cells_per_sample_differ_threefol
 def test_pooled_warns_when_cells_per_sample_differ_between_conditions_and_still_runs(test):
     values, samples, groups = _uneven(8, 50, 5)
     with pytest.warns(UserWarning, match='differ about 10-fold') as rec:
-        out = scRL.compare_readout(values, samples, groups, test=test)
+        out = scRL.compare_readout(values, samples, groups, test=test, scale='raw')
     message = ' '.join(str(r.message) for r in rec)
     assert "test='welch'" in message and "test='mixed'" in message and 'tenfold' in message
     assert out['test'] == 'pooled'
@@ -513,7 +536,7 @@ def test_one_value_per_sample():
     samples = np.arange(8)
     groups = np.repeat(['a', 'b'], 4)
     for t, equal_var in (('pooled', True), ('welch', False)):
-        out = scRL.compare_readout(values, samples, groups, test=t)
+        out = scRL.compare_readout(values, samples, groups, test=t, scale='raw')
         ref = stats.ttest_ind(values[:4], values[4:], equal_var=equal_var)
         assert out['statistic'] == pytest.approx(ref.statistic)
         assert out['p_value'] == pytest.approx(ref.pvalue)
@@ -593,6 +616,151 @@ def test_returned_design_effect_is_estimated_within_conditions():
     message = next(str(r.message) for r in rec if 'independent unit' in str(r.message))
     assert f"{within['predicted_false_call_rate']:.3g}" in message
     assert f"{plain['predicted_false_call_rate']:.3g}" not in message
+
+
+SCALES = ('normal', 'rank', 'raw')
+
+
+def _skewed():
+    """Six samples with unequal numbers of cells, a skewed readout and one tied pair of cells."""
+    values, samples, groups = _design([0, 1, 5, 2, 6, 4], cells=[2, 5, 9, 9, 2, 5], sd=1, seed=2)
+    values = np.exp(values / 2)
+    values[20] = values[3]
+    return values, samples, groups
+
+
+@pytest.mark.parametrize('scale', SCALES)
+@pytest.mark.parametrize('test, equal_var', [('pooled', True), ('welch', False)])
+def test_t_tests_match_scipy_on_sample_means_of_the_named_scale(test, equal_var, scale):
+    values, samples, groups = _skewed()
+    means = _sample_means(_on_scale(values, scale), samples)
+    ref = stats.ttest_ind(means[:3], means[3:], equal_var=equal_var)
+    out = scRL.compare_readout(values, samples, groups, test=test, scale=scale)
+    assert out['test'] == test and out['scale'] == scale
+    assert out['n_cells'] == (16, 16)
+    assert out['statistic'] == pytest.approx(ref.statistic)
+    assert out['p_value'] == pytest.approx(ref.pvalue)
+    assert out['df'] == pytest.approx(4 if equal_var else ref.df)
+
+
+@pytest.mark.parametrize('test', ['pooled', 'welch'])
+def test_the_three_scales_give_three_different_tests(test):
+    values, samples, groups = _skewed()
+    t = [scRL.compare_readout(values, samples, groups, test=test, scale=scale)['statistic'] for scale in SCALES]
+    assert min(abs(t[0] - t[1]), abs(t[0] - t[2]), abs(t[1] - t[2])) > 1e-3
+
+
+def test_default_scale_is_normal_and_auto_reports_it():
+    values, samples, groups = _skewed()
+    means = _sample_means(_on_scale(values, 'normal'), samples)
+    ref = stats.ttest_ind(means[:3], means[3:])
+    for kwargs in ({}, {'test': 'auto'}, {'test': 'pooled'}, {'scale': 'normal'}):
+        out = scRL.compare_readout(values, samples, groups, **kwargs)
+        assert out['test'] == 'pooled' and out['scale'] == 'normal'
+        assert out['statistic'] == pytest.approx(ref.statistic)
+        assert out['p_value'] == pytest.approx(ref.pvalue)
+    ref = stats.ttest_ind(means[:3], means[3:], equal_var=False)
+    out = scRL.compare_readout(values, samples, groups, test='welch')
+    assert out['scale'] == 'normal' and out['p_value'] == pytest.approx(ref.pvalue)
+    for scale in SCALES:
+        assert scRL.compare_readout(values, samples, groups, scale=scale)['scale'] == scale
+
+
+@pytest.mark.parametrize('scale', SCALES)
+@pytest.mark.parametrize('test', ['auto', 'pooled', 'welch'])
+def test_estimate_is_the_raw_difference_and_estimate_scaled_is_on_the_scale_of_the_test(test, scale):
+    values, samples, groups = _skewed()
+    raw = _sample_means(values, samples)
+    scaled = _sample_means(_on_scale(values, scale), samples)
+    out = scRL.compare_readout(values, samples, groups, test=test, scale=scale)
+    assert out['estimate'] == pytest.approx(raw[:3].mean() - raw[3:].mean())
+    assert out['estimate_scaled'] == pytest.approx(scaled[:3].mean() - scaled[3:].mean())
+    assert type(out['estimate_scaled']) is float
+    if scale == 'raw':
+        assert out['estimate_scaled'] == out['estimate']
+    else:
+        assert abs(out['estimate_scaled'] - out['estimate']) > 0.1
+
+
+@pytest.mark.parametrize('test', ['relabel', 'mixed', 'cells'])
+def test_scale_is_none_and_has_no_effect_for_the_tests_that_ignore_it(test):
+    rng = np.random.default_rng(12)
+    v, s, g = _clustered(10, 30, .3, rng, shift=.5)
+    results = []
+    for scale in SCALES:
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            results.append(scRL.compare_readout(np.exp(v), s, g, test=test, scale=scale))
+    raw = _sample_means(np.exp(v), s)
+    for out in results:
+        assert out['test'] == test
+        assert out['scale'] is None and out['estimate_scaled'] is None
+        assert out['estimate'] == pytest.approx(raw[:5].mean() - raw[5:].mean())
+        assert out['statistic'] == results[0]['statistic'] and out['p_value'] == results[0]['p_value']
+
+
+def test_unknown_scale_is_refused_whatever_the_test():
+    v, s, g = _design(list(range(8)), cells=3, sd=1)
+    for bad in ('ranks', 'Normal', 'log', None, 1):
+        for t in ('auto', 'pooled', 'welch', 'relabel', 'mixed', 'cells'):
+            with pytest.raises(ValueError, match=r"scale must be one of \('normal', 'rank', 'raw'\)"):
+                scRL.compare_readout(v, s, g, test=t, scale=bad)
+
+
+@pytest.mark.parametrize('scale', SCALES)
+def test_one_value_per_sample_under_each_scale(scale):
+    rng = np.random.default_rng(6)
+    values = np.exp(rng.normal(size=9) + np.repeat([0.0, 1.0], [4, 5]))
+    values[7] = values[2]                                # a tie between two samples
+    samples = np.arange(9)
+    groups = np.repeat(['a', 'b'], [4, 5])
+    z = _on_scale(values, scale)
+    for t, equal_var in (('pooled', True), ('welch', False)):
+        out = scRL.compare_readout(values, samples, groups, test=t, scale=scale)
+        ref = stats.ttest_ind(z[:4], z[4:], equal_var=equal_var)
+        assert out['scale'] == scale
+        assert out['statistic'] == pytest.approx(ref.statistic)
+        assert out['p_value'] == pytest.approx(ref.pvalue)
+        assert out['estimate'] == pytest.approx(values[:4].mean() - values[4:].mean())
+        assert out['estimate_scaled'] == pytest.approx(z[:4].mean() - z[4:].mean())
+        assert out['design_effect'] is None and out['n_cells'] == (4, 5)
+
+
+@pytest.mark.parametrize('test', ['pooled', 'welch'])
+def test_a_monotone_transform_of_the_readout_changes_the_raw_test_only(test):
+    values, samples, groups = _design([0, 1, 5, 2, 6, 4], cells=[2, 5, 9, 9, 2, 5], sd=1, seed=2)
+    for scale in ('rank', 'normal'):
+        plain = scRL.compare_readout(values, samples, groups, test=test, scale=scale)
+        moved = scRL.compare_readout(np.exp(values), samples, groups, test=test, scale=scale)
+        assert moved['statistic'] == pytest.approx(plain['statistic'], rel=1e-12)
+        assert moved['p_value'] == pytest.approx(plain['p_value'], rel=1e-12)
+        assert moved['estimate_scaled'] == pytest.approx(plain['estimate_scaled'], rel=1e-12)
+        assert abs(moved['estimate'] - plain['estimate']) > 1
+    plain = scRL.compare_readout(values, samples, groups, test=test, scale='raw')
+    moved = scRL.compare_readout(np.exp(values), samples, groups, test=test, scale='raw')
+    assert abs(moved['statistic'] - plain['statistic']) > 0.01
+    assert abs(moved['p_value'] - plain['p_value']) > 0.01
+
+
+@pytest.mark.parametrize('test', ['pooled', 'welch'])
+def test_the_check_for_sample_means_without_spread_is_made_on_the_scale_of_the_test(test):
+    # raw sample means 1, 1 against 6, 6; the mean ranks and mean normal scores of the samples differ within conditions
+    values = np.array([0, 0, 3, 1, 1, 1, 4, 4, 10, 6, 6, 6], dtype=float)
+    samples = np.repeat(list('abcd'), 3)
+    groups = np.repeat(['x', 'y'], 6)
+    with pytest.raises(ValueError, match='do not vary'):
+        scRL.compare_readout(values, samples, groups, test=test, scale='raw')
+    for scale in ('rank', 'normal'):
+        means = _sample_means(_on_scale(values, scale), samples)
+        ref = stats.ttest_ind(means[:2], means[2:], equal_var=test == 'pooled')
+        out = scRL.compare_readout(values, samples, groups, test=test, scale=scale)
+        assert out['p_value'] == pytest.approx(ref.pvalue)
+        assert out['estimate'] == pytest.approx(1.0 - 6.0)
+    # one value per sample: equal within each condition on every scale
+    values, samples, groups = _design([1, 1, 1, 2, 2, 2], cells=1)
+    for scale in SCALES:
+        with pytest.raises(ValueError, match='do not vary'):
+            scRL.compare_readout(values, samples, groups, test=test, scale=scale)
 
 
 def test_importable_from_top_level():

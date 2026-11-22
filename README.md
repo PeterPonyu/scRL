@@ -163,7 +163,7 @@ A grid built once can also read cells that were not used to build it: `scRL.plac
 
 Two conditions are compared on one grid built from all cells. `scRL.project_conditions` counts each condition's cells at every grid point, `scRL.compare_abundance` tests where their numbers differ and reports, per cluster, how many grid points held by one condition only are expected from sampling alone, `scRL.compare_values(gres, test, reference, ends=[...])` labels each condition's map from its own cells, solves the lineage reward exactly on both maps and compares the values against a label-shuffling null, and `scRL.plot_conditions` draws the result.
 
-For a per-cell readout (a pseudotime, a fate probability, a signature score), `scRL.design_effect` states how strongly cells cluster within samples, and `scRL.compare_readout(values, samples, groups)` compares the two conditions with the sample as the unit (t-test on sample means by default; relabelling and mixed-model tests on request).
+For a per-cell readout (a pseudotime, a fate probability, a signature score), `scRL.design_effect` states how strongly cells cluster within samples, and `scRL.compare_readout(values, samples, groups)` compares the two conditions with the sample as the unit (by default a t-test on the samples' mean normal scores, with the difference of the samples' mean readout reported beside it as `estimate`; `scale='raw'` gives the classical t-test on sample means; relabelling and mixed-model tests on request).
 
 ```python
 scRL.project_conditions(gres, adata.obs['condition'])
