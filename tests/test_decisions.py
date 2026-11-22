@@ -23,10 +23,10 @@ def _line(extra_sink=False):
     return sparse.csr_matrix(P), np.array([0, -1, -1, -1, 1])
 
 
-def _identity_error(gres, key_add, forward=.25):
+def _identity_error(gres, key_add):
     """Largest |h(1-h) - G d| over the transient points that can arrive, for every lineage."""
     names, owner = _lineages(gres, ENDS)
-    P = _walk(gres, gres.grids['neighbors'], forward, None)
+    P = _walk(gres, gres.grids['neighbors'], .25, None)
     ok = _reaching(P, owner >= 0) & (owner < 0)
     idx = np.flatnonzero(ok)
     G = np.linalg.inv(np.eye(len(idx)) - P[idx][:, idx].toarray())
@@ -39,7 +39,7 @@ def test_line_of_five_by_hand():
     from scRL.CorridorCore import _decision_terms
     P, owner = _line()
     mu = np.array([0, 0, 1., 0, 0])
-    H, d, g, ok = _decision_terms(P, owner, mu)
+    H, d, g, ok = _decision_terms(P, owner, 2, mu)
     assert ok.tolist() == [False, True, True, True, False]
     np.testing.assert_allclose(H[:, 1], [0, .25, .5, .75, 1])
     np.testing.assert_allclose(d[:, 1], [0, 1 / 16, 1 / 16, 1 / 16, 0])      # 2 * 1/2 * (1/4)^2
@@ -56,7 +56,7 @@ def test_identity_with_mass_that_does_not_arrive():
     from scRL.CorridorCore import _decision_terms
     P = sparse.csr_matrix(np.array([[0, 1, 0, 0], [1 / 3, 0, 1 / 3, 1 / 3], [0, 1, 0, 0], [0, 0, 0, 1.]]))
     owner = np.array([0, -1, 1, -1])
-    H, d, g, ok = _decision_terms(P, owner, np.array([0, 1., 0, 0]))
+    H, d, g, ok = _decision_terms(P, owner, 2, np.array([0, 1., 0, 0]))
     assert ok.tolist() == [False, True, False, False]
     np.testing.assert_allclose(H[1], [1 / 3, 1 / 3])
     np.testing.assert_allclose(d[1], [2 / 9, 2 / 9])           # 1/3 * ((2/3)^2 + (1/3)^2 + (1/3)^2): the lost point counts
@@ -80,7 +80,7 @@ def test_identity_and_zeros_on_the_tree():
     assert (d.to_numpy()[owner < 0] > 0).any()
 
 
-def test_map_sums_to_outcome_variance_and_two_lineages_agree():
+def test_map_sums_to_mean_start_variance_and_two_lineages_agree():
     gres = _tree()
     out = scRL.fate_decisions(gres, **ARGS)
     scRL.fate_corridors(gres, ENDS, start='root', weights='uniform')
@@ -90,7 +90,7 @@ def test_map_sums_to_outcome_variance_and_two_lineages_agree():
     var = mu @ (H * (1 - H))
     assert np.allclose(H.sum(1)[mu > 0], 1)
     np.testing.assert_allclose(D.sum().to_numpy(), var, atol=1e-8)
-    np.testing.assert_allclose(out['variance'].to_numpy(), var, atol=1e-8)
+    np.testing.assert_allclose(out['within_start_variance'].to_numpy(), var, atol=1e-8)
     assert np.allclose(gres.grids['decision_total'], D.sum(1))
     d = gres.grids['decision_intensity']
     np.testing.assert_allclose(d['A'], d['B'], atol=1e-10)
@@ -114,7 +114,7 @@ def test_stored_keys_and_same_numbers_with_or_without_corridors():
         assert np.asarray(a.embedding[key]).shape == (n_cells,)
     assert a.grids['decision_settings']['names'] == ['A', 'B']
     assert list(out.index) == ['A', 'B'] and out.index.name == 'lineage'
-    assert list(out.columns) == ['probability', 'variance', 'start_points']
+    assert list(out.columns) == ['probability', 'within_start_variance', 'start_points']
     b = _tree()
     scRL.fate_corridors(b, ENDS, start='root', weights='uniform')
     out_b = scRL.fate_decisions(b, **ARGS)
@@ -146,7 +146,7 @@ def test_errors():
     from conftest import make_tree
     X, labels, Z, genes = make_tree(d=3)
     bare = scRL.grids_from_embedding(X)
-    with pytest.raises((KeyError, ValueError), match='project_cluster'):
+    with pytest.raises(KeyError, match='project_cluster'):
         scRL.fate_decisions(bare, ENDS, start='root')
     scRL.project_cluster(bare, pd.Series(pd.Categorical(labels)))
     with pytest.raises(KeyError, match='align_pseudotime'):
@@ -160,7 +160,7 @@ def test_two_dimensional_scan_grid(scan2d):
     H = scan2d.grids['corridor_fate'].to_numpy()
     mu = np.asarray(scan2d.grids['corridor_start'])
     np.testing.assert_allclose(scan2d.grids['decision'].sum().to_numpy(), mu @ (H * (1 - H)), atol=1e-8)
-    assert (scan2d.grids['decision_intensity'].to_numpy() >= 0).all() and out.variance.gt(0).all()
+    assert (scan2d.grids['decision_intensity'].to_numpy() >= 0).all() and out.within_start_variance.gt(0).all()
 
 
 @pytest.mark.parametrize('key', ['decision_A', 'decision_intensity_B', 'decision_total'])
@@ -173,3 +173,57 @@ def test_the_grid_view_colours_by_the_decision_map(key):
     ax = scRL.plot_grids(gres, key=key, cells=True)
     assert len(ax.figure.axes) == 2
     plt.close('all')
+
+
+ENDS3 = {'A': 'tipA', 'B': 'tipB', 'R': 'root'}
+
+
+def _leaky(cluster, fraction, seed=0):
+    """A random move policy for the tree grid, with the outgoing moves of some points of a cluster zeroed."""
+    gres = _tree()
+    nb = np.asarray(gres.grids['neighbors'])
+    policy = np.random.default_rng(seed).random(nb.shape) + .05
+    labels = np.asarray(gres.grids['mapped_grids_clusters']).astype(str)
+    pool = np.flatnonzero(labels == cluster)
+    cut = np.random.default_rng(seed + 1).choice(pool, max(1, int(round(fraction * len(pool)))), replace=False)
+    policy[cut] = 0
+    return gres, policy, cut
+
+
+def _leaky_identity_error(gres, ends, policy, key_add='decision'):
+    names, owner = _lineages(gres, ends)
+    P = _walk(gres, gres.grids['neighbors'], .25, policy)
+    ok = _reaching(P, owner >= 0) & (owner < 0)
+    idx = np.flatnonzero(ok)
+    G = np.linalg.inv(np.eye(len(idx)) - P[idx][:, idx].toarray())
+    H = gres.grids['leak_fate'].to_numpy()[idx]
+    d = gres.grids[f'{key_add}_intensity'].to_numpy()[idx]
+    return np.abs(H * (1 - H) - G @ d).max(), len(idx)
+
+
+@pytest.mark.parametrize('ends,start', [(ENDS, 'root'), (ENDS3, 'trunk')])
+def test_identity_and_map_with_lost_mass(ends, start):
+    gres, policy, cut = _leaky('trunk', .03)
+    with pytest.warns(UserWarning, match='without an end point'):
+        scRL.fate_corridors(gres, ends, start=start, weights='uniform', policy=policy, key_add='leak')
+    with pytest.warns(UserWarning, match='without an end point'):
+        out = scRL.fate_decisions(gres, ends, start=start, weights='uniform', policy=policy)
+    err, n = _leaky_identity_error(gres, ends, policy)
+    assert n > 100 and err < 1e-8
+    H = gres.grids['leak_fate'].to_numpy()
+    mu = np.asarray(gres.grids['decision_start'])
+    assert out.probability.sum() < .99 and (H.sum(1)[mu > 0] < 1 - 1e-6).all()
+    D = gres.grids['decision']
+    np.testing.assert_allclose(D.sum().to_numpy(), mu @ (H * (1 - H)), atol=1e-8)
+    d = gres.grids['decision_intensity']
+    assert np.abs(d['A'] - d['B']).max() > 1e-6               # equal only when no mass is lost
+    assert (d.to_numpy() >= 0).all()
+    assert np.allclose(d.to_numpy()[cut], 0)                  # a trapped point decides nothing
+
+
+def test_trapped_start_point_is_warned_about_and_dropped():
+    gres, policy, cut = _leaky('root', .05)
+    with pytest.warns(UserWarning, match='cannot reach any lineage'):
+        scRL.fate_decisions(gres, ENDS, start='root', weights='uniform', policy=policy)
+    mu = np.asarray(gres.grids['decision_start'])
+    assert (mu[cut] == 0).all() and np.isclose(mu.sum(), 1) and (mu > 0).sum() > 0

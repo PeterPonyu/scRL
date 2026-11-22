@@ -222,7 +222,7 @@ def fate_corridors(gres, ends, start, weights='cells', forward=.25, policy=None,
                          'start_cells': float(_cell_counts(gres)[mu > 0].sum())}, index=pd.Index(names, name='lineage'))
 
 
-def _decision_terms(P, owner, mu):
+def _decision_terms(P, owner, L, mu):
     """
     Fate potentials, decision intensities and visits of the walk ``P`` whose end points (``owner`` >= 0) absorb it.
 
@@ -232,7 +232,7 @@ def _decision_terms(P, owner, mu):
     Moves into grid parts without an end point count as a move to a point whose fate potential is 0, so that
     h (1 - h) = (I - Q)^-1 d holds for every transient point, with Q the moves among the points that can arrive.
     """
-    M, L = P.shape[0], int(owner.max()) + 1
+    M = P.shape[0]
     absorbing = owner >= 0
     ok = _reaching(P, absorbing) & ~absorbing
     idx = np.flatnonzero(ok)
@@ -257,7 +257,8 @@ def _decision_terms(P, owner, mu):
 def fate_decisions(gres, ends, start, weights='cells', forward=.25, policy=None, key_add='decision'):
     """
     Where on the grid each lineage's fate is decided: the one-step variance of the fate potential, and its
-    visit-weighted map from a start region.
+    visit-weighted map from a start region. The decision map describes the walk on the grid, where the walk's
+    outcome for a lineage becomes determined; it is not by itself a measurement of where cells commit.
 
     The walk, its end points and the start region are those of ``fate_corridors``. For lineage l with fate
     potential h_l (the probability that a walk from a grid point ends in l), the decision intensity at a transient
@@ -272,10 +273,13 @@ def fate_decisions(gres, ends, start, weights='cells', forward=.25, policy=None,
     outcome indicator of l.
 
     The decision map of the start region is D_l(p) = g(p) d_l(p), with g(p) the expected number of visits to p by a
-    walk from the start region (as in ``fate_corridors``). It sums over the grid to the variance of the outcome
-    indicator of l from the start region, sum_p mu(p) h_l(p) (1 - h_l(p)), with mu the start weights: the share of
-    that variance spent at each grid point. In reinforcement-learning terms d_l is the variance of the
-    temporal-difference target of the value h_l under the walk.
+    walk from the start region (as in ``fate_corridors``). It sums over the grid to the mean, over the start points
+    weighted as the start distribution mu, of h_l(1 - h_l): the variance of a walk's outcome for l given its start
+    point, averaged over the start region (not the variance of the outcome of a walk from a random start point,
+    which would also contain the spread of h_l across start points). The map shows where along the walks that
+    variance is spent. In reinforcement-learning terms d_l is the variance of the temporal-difference target of the
+    value h_l under the walk. For two lineages without lost mass the two intensities are equal (h_2 = 1 - h_1), so
+    the total over lineages is twice either one; with lost mass the total leaves out the lost outcome.
 
     Parameters
     ----------
@@ -300,9 +304,9 @@ def fate_decisions(gres, ends, start, weights='cells', forward=.25, policy=None,
 
     Returns
     ----------
-    DataFrame, one row per lineage: probability that a walk from the start region ends in the lineage, the
-    variance of its outcome indicator from the start region (the total of the decision map) and the start
-    region's size. Stored on the grid: ``<key_add>_intensity`` and ``<key_add>`` (tables of the decision
+    DataFrame, one row per lineage: probability that a walk from the start region ends in the lineage, its
+    ``within_start_variance`` (the mean over start points, weighted as the start distribution, of h_l(1 - h_l); the
+    total of the decision map) and the start region's size. Stored on the grid: ``<key_add>_intensity`` and ``<key_add>`` (tables of the decision
     intensity and the decision map, kept grid points x lineages), ``<key_add>_intensity_<name>`` and
     ``<key_add>_<name>`` (the same per lineage, also brought to the cells), ``<key_add>_total`` (the decision map
     summed over the lineages, also for the cells), ``<key_add>_start`` (start weights) and ``<key_add>_settings``.
@@ -328,7 +332,7 @@ def fate_decisions(gres, ends, start, weights='cells', forward=.25, policy=None,
         if mu.sum() == 0:
             raise ValueError('No start grid point can reach a lineage.')
         mu = mu / mu.sum()
-    H, d, g, ok = _decision_terms(P, owner, mu)
+    H, d, g, ok = _decision_terms(P, owner, len(names), mu)
     D = g[:, None] * d
     mapped = np.asarray(gres.grids['mapped_grids'])
     for i, n in enumerate(names):
@@ -348,7 +352,8 @@ def fate_decisions(gres, ends, start, weights='cells', forward=.25, policy=None,
     if prob.sum() < .99:
         warnings.warn(f'Walks from the start region end in a listed lineage with probability {prob.sum():.3f}; the '
                       'rest stay on grid parts without an end point.', UserWarning, stacklevel=2)
-    return pd.DataFrame({'probability': prob, 'variance': mu @ (H * (1 - H)), 'start_points': int((mu > 0).sum())},
+    return pd.DataFrame({'probability': prob, 'within_start_variance': mu @ (H * (1 - H)),
+                         'start_points': int((mu > 0).sum())},
                         index=pd.Index(names, name='lineage'))
 
 

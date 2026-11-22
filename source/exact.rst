@@ -170,11 +170,12 @@ Corridors of several lineages run together where they leave the start region and
 mask such as ``gres.grids['corridor_potency'] >= 2`` defines the multipotent region from the data instead of a
 cluster.
 
-``scRL.fate_decisions`` adds where each lineage's fate is decided. The decision intensity of lineage l at a grid point
-is the variance of the one-step change of its fate potential, which is zero at the end points and wherever only one
+``scRL.fate_decisions`` adds where each lineage's fate is decided on the walk: where the walk's outcome for a lineage
+becomes determined. This describes the walk on the grid and is not by itself a measurement of where cells commit. The decision intensity of lineage l at a grid
+point is the variance of the one-step change of its fate potential, which is zero at the end points and wherever only one
 outcome for l remains open; summed along the walk it gives back the uncertainty, h (1 - h) = (I - Q)^-1 d, and its
-map from the start region (intensity times expected visits) sums to the variance of the outcome from the start
-region. Any stored value can colour the grid view.
+map from the start region (intensity times expected visits) sums to the mean, over the start points, of the
+variance of a walk's outcome given its start point. Any stored value can colour the grid view.
 
 .. code-block:: python
 
