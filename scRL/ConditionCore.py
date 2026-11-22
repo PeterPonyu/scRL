@@ -1046,6 +1046,14 @@ def _paired(a, b):
         return stats.ttest_rel(a, b, axis=0).pvalue
 
 
+def _few_sample_rate(c, k):
+    """Two-sided rate of exceeding c when k >= 3 samples are divided into two groups, by the t distribution with
+    k - 2 degrees of freedom; 0 when c squared is at least k - 1."""
+    if c * c >= k - 1:
+        return 0.0
+    return float(2 * stats.t.sf(c * np.sqrt(k - 2) / np.sqrt(k - 1 - c * c), k - 2))
+
+
 def design_effect(values, samples, alpha=0.05, scale='rank'):
     """
     How far a test that takes cells as units over-calls, given how cells cluster within samples.
@@ -1060,6 +1068,16 @@ def design_effect(values, samples, alpha=0.05, scale='rank'):
     approximation, not a guarantee: it is less reliable with few samples or very unequal sample sizes. The
     sample-level tests of this module (``compare_fates(..., samples=...)``) are the remedy: they take the
     sample as the unit.
+
+    Two forms of the predicted rate are returned. With ``c`` the normal quantile of ``1 - alpha / 2`` divided by
+    the square root of the design effect and ``k`` the number of samples, the normal form is ``2 * (1 - Phi(c))``.
+    The few-sample form assumes that the ``k`` samples are divided into two groups and refers the same quantity
+    to a t distribution: ``2 * P(t > c * sqrt(k - 2) / sqrt(k - 1 - c**2))`` with ``k - 2`` degrees of freedom,
+    and 0 when ``c**2 >= k - 1``. It tends to the normal form as the number of samples grows. On designs of
+    four to eleven animals the few-sample form was closer to the observed rate of a cell-level rank-sum test
+    than the normal form, which ran low there; that check is an indication only, and neither form is a
+    calibrated estimate. With few samples and a design effect near 1 the few-sample form falls below ``alpha``
+    (to 0 for four samples at ``alpha`` 0.05), where the normal form gives ``alpha``.
 
     Parameters
     ----------
@@ -1085,8 +1103,10 @@ def design_effect(values, samples, alpha=0.05, scale='rank'):
     A plain ``dict`` (not a table, unlike the comparison functions of this module) with ``n_cells`` and
     ``n_samples`` kept, ``cells_per_sample`` (m, the mean number of kept cells per sample), ``icc`` (as
     estimated, possibly negative), ``design_effect`` (1 when the estimate is not positive),
-    ``predicted_false_call_rate``, ``effective_cells_per_sample`` (m divided by the design effect), ``alpha``,
-    ``scale`` and ``n_dropped`` (cells left out for a missing value or a missing sample label).
+    ``predicted_false_call_rate`` (the few-sample form with three or more samples; with two samples it equals
+    the normal form), ``predicted_false_call_rate_normal`` (the normal form),
+    ``effective_cells_per_sample`` (m divided by the design effect), ``alpha``, ``scale`` and ``n_dropped``
+    (cells left out for a missing value or a missing sample label).
     """
     if scale not in ('rank', 'raw'):
         raise ValueError(f"scale must be 'rank' or 'raw', not {scale!r}.")
@@ -1121,10 +1141,12 @@ def design_effect(values, samples, alpha=0.05, scale='rank'):
     icc = float((msb - msw) / denom) if denom > 0 else 0.0
     m = N / k
     deff = 1 + (m - 1) * max(icc, 0.0)
-    z = stats.norm.ppf(1 - alpha / 2)
+    c = stats.norm.ppf(1 - alpha / 2) / np.sqrt(deff)
+    normal = float(2 * (1 - stats.norm.cdf(c)))
     return {'n_cells': int(N), 'n_samples': int(k), 'cells_per_sample': float(m), 'icc': icc,
             'design_effect': float(deff),
-            'predicted_false_call_rate': float(2 * (1 - stats.norm.cdf(z / np.sqrt(deff)))),
+            'predicted_false_call_rate': _few_sample_rate(c, k) if k >= 3 else normal,
+            'predicted_false_call_rate_normal': normal,
             'effective_cells_per_sample': float(m / deff), 'alpha': float(alpha), 'scale': scale,
             'n_dropped': n_dropped}
 
@@ -1176,42 +1198,56 @@ def _means_t_test(m1, m2, equal_var=True):
     return stats.ttest_ind(m1, m2, equal_var=equal_var)
 
 
-def _suitable_tests(k):
-    """The tests the guidance of compare_readout names for k samples in total."""
+def _suitable_tests(k, ratio=1.0):
+    """The tests the guidance of compare_readout names for k samples in total and a ratio of cells per sample."""
+    first = 'pooled' if ratio < 3 else 'welch'
     if k < 7:
-        return ['pooled']
-    return ['pooled', 'mixed'] if k < 9 else ['pooled', 'relabel', 'mixed']
+        return [first]
+    return [first, 'mixed'] if k < 9 else [first, 'relabel', 'mixed']
 
 
 def _relabel_test(ranks, codes, side_of_sample, n_relabel, seed):
-    """Mean-rank difference, its relabelling p-value and the smallest p the procedure could return."""
+    """Welch t statistic of the two conditions' sample mean ranks, its relabelling p-value and the smallest p the
+    procedure could return.
+
+    A single sample has no variance, so when either condition has exactly one sample the statistic of the whole
+    call is the difference of the unweighted means of the sample mean ranks."""
     k = len(side_of_sample)
-    n = np.bincount(codes).astype(float)
-    r = np.bincount(codes, weights=ranks)
+    mean_rank = np.bincount(codes, weights=ranks) / np.bincount(codes)
     k1 = int((side_of_sample == 0).sum())
-    total_n, total_r = n.sum(), r.sum()
+    k2 = k - k1
 
-    def stat(member):                                # member: (..., k) 0/1 indicator of condition 1
-        n1, r1 = member @ n, member @ r
-        return r1 / n1 - (total_r - r1) / (total_n - n1)
+    def stat(member):                                # member: (b, k) True for the samples of condition 1
+        a = mean_rank[np.nonzero(member)[1]].reshape(-1, k1)
+        b = mean_rank[np.nonzero(~member)[1]].reshape(-1, k2)
+        diff = a.mean(axis=1) - b.mean(axis=1)
+        if min(k1, k2) < 2:
+            return diff
+        flat = (np.ptp(a, axis=1) == 0) & (np.ptp(b, axis=1) == 0)     # no variance within either condition
+        diff = np.where(flat, a[:, 0] - b[:, 0], diff)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            t = diff / np.sqrt(a.var(axis=1, ddof=1) / k1 + b.var(axis=1, ddof=1) / k2)
+        return np.where(flat, np.where(diff == 0, 0.0, np.copysign(np.inf, diff)), t)
 
-    observed = float(stat((side_of_sample == 0).astype(float)))
+    observed = float(stat(side_of_sample[None, :] == 0)[0])
     n_distinct = math.comb(k, k1)
     if n_distinct <= n_relabel:
         sets = np.array(list(itertools.combinations(range(k), k1)))
-        member = np.zeros((len(sets), k))
-        np.put_along_axis(member, sets, 1.0, axis=1)
+        member = np.zeros((len(sets), k), dtype=bool)
+        np.put_along_axis(member, sets, True, axis=1)
         smallest = (2 if 2 * k1 == k else 1) / n_distinct
         extra = 0
     else:
         rng = np.random.default_rng(seed)
-        member = np.zeros((n_relabel, k))
+        member = np.zeros((n_relabel, k), dtype=bool)
         for row in member:
-            row[rng.choice(k, size=k1, replace=False)] = 1.0
+            row[rng.choice(k, size=k1, replace=False)] = True
         smallest = 1 / (n_relabel + 1)
         extra = 1                                    # the observed relabelling joins the random ones
     s = stat(member)
-    hits = int((np.abs(s) >= abs(observed) - 1e-12).sum()) + extra
+    # an infinite observed statistic is matched only by infinite ones, and ties count as at least as extreme
+    slack = 1e-12 * max(1.0, abs(observed)) if np.isfinite(observed) else 0.0
+    hits = int((np.abs(s) >= abs(observed) - slack).sum()) + extra
     p = hits / (len(s) + extra)
     return observed, float(min(p, 1.0)), float(smallest)
 
@@ -1261,12 +1297,16 @@ def compare_readout(values, samples, groups, test='auto', alpha=0.05, n_relabel=
 
     - ``'pooled'``: the two-sample t-test with pooled variance on the per-sample means of the readout.
     - ``'welch'``: the Welch t-test (unequal variances) on the per-sample means.
-    - ``'relabel'``: the difference between the mean rank of the cells of condition 1 and of condition 2 (average
-      ranks over all kept cells), referred to the distribution obtained by relabelling whole samples between the
+    - ``'relabel'``: the Welch t statistic of the two conditions' sample mean ranks (average ranks over all kept
+      cells, then the mean rank of each sample, every sample counting once whatever its number of cells),
+      referred to the distribution of the same statistic obtained by relabelling whole samples between the
       conditions, keeping the numbers of samples. All distinct relabellings are used when there are at most
       ``n_relabel``; otherwise ``n_relabel`` random ones (seeded) plus the observed one. The p-value is the share
-      of relabellings whose absolute statistic is at least the observed one (tolerance 1e-12). It assumes
-      similar numbers of cells per sample in the two conditions.
+      of relabellings whose absolute statistic is at least the observed one (tolerance 1e-12, relative to the
+      observed statistic when that exceeds 1). When the sample mean ranks vary within neither condition the
+      statistic is infinite with the sign of their difference, or 0 if they do not differ. It was checked with
+      a tenfold difference in cells per sample between the conditions on designs of eight or more samples,
+      where it held its level; with a group of two samples under such a difference it did not.
     - ``'mixed'``: a linear mixed model, fitted by restricted maximum likelihood (statsmodels, imported only when
       this test is asked for), on the rank-based normal scores of the readout with a fixed condition effect and a
       random intercept per sample; the effect over its standard error is referred to a t distribution with
@@ -1281,13 +1321,16 @@ def compare_readout(values, samples, groups, test='auto', alpha=0.05, n_relabel=
     - ``'auto'``: the same as ``'pooled'``.
 
     Guidance on the number of samples (all conditions together). It comes from planted shifts on a limited number
-    of designs and is not a statement about every design: with fewer than seven samples, only the pooled t-test on
-    sample means; with seven or eight, the pooled t-test by default, with the mixed model as an alternative; from
-    nine, the relabelling test or the mixed model are also suitable. The t-test on sample means is the default
-    because it kept close to its nominal level in the settings examined, which are those designs and no others.
-    With three samples per condition no test beyond it could be shown to hold its level, and the relabelling test
-    cannot reject at 0.05 (its smallest attainable p-value is 0.1). No claim is made that any test is best in
-    general.
+    of designs and is not a statement about every design. With three samples per condition, the false-positive
+    rate of the pooled t-test on sample means, averaged over many sets of six animals, was 0.045; a single design
+    of that size cannot be checked, and the relabelling test cannot reject at 0.05 there (its smallest attainable
+    p-value is 0.1). With seven or eight samples in all: the pooled t-test (the default) or the mixed model. With
+    nine or more: the relabelling test as well. When the numbers of cells per sample differ several-fold between
+    the conditions: the Welch t-test, the mixed model, or the relabelling test (eight or more samples); the
+    pooled t-test rejected too often with a tenfold difference, and it warns when the ratio is at least 3 (see
+    ``cells_per_sample_ratio`` below) without being replaced. The pooled t-test is the default because it kept
+    close to its nominal level in the settings examined with similar numbers of cells per sample, which are
+    those designs and no others. No claim is made that any test is best in general.
 
     One value per sample (per-sample summaries, one row per animal) is accepted by ``'pooled'``, ``'welch'`` and
     ``'relabel'``; ``'mixed'`` and ``'cells'`` need more than one cell per sample.
@@ -1322,7 +1365,9 @@ def compare_readout(values, samples, groups, test='auto', alpha=0.05, n_relabel=
     does not apply), ``estimate`` (the difference of the per-sample means, condition 1 minus condition 2, on the
     readout's own scale, for every test), ``condition_1`` and ``condition_2``, ``n_samples`` and ``n_cells`` (a
     tuple per condition), ``n_dropped`` (cells left out for a missing value, sample or group),
-    ``suitable_tests`` (the tests the guidance above names for this number of samples; it repeats that guidance
+    ``cells_per_sample_ratio`` (the larger over the smaller of the two conditions' mean numbers of cells per
+    sample, at least 1), ``suitable_tests`` (the tests the guidance above names for this number of samples, with
+    ``'welch'`` in place of ``'pooled'`` when ``cells_per_sample_ratio`` is at least 3; it repeats that guidance
     and is not a verdict on these data), ``smallest_p`` (the smallest p-value the relabelling test could return;
     None for the other tests), ``fallback`` (True only when the mixed model was replaced by the t-test on sample
     means, as described above; False otherwise, for every test) and ``design_effect`` (the dict returned by
@@ -1345,7 +1390,14 @@ def compare_readout(values, samples, groups, test='auto', alpha=0.05, n_relabel=
     means = np.bincount(codes, weights=x) / sizes
     m1, m2 = means[side == 0], means[side == 1]
     ranks = stats.rankdata(x, method='average')
+    per_sample = (n_cells[0] / n_samples[0], n_cells[1] / n_samples[1])
+    ratio = float(max(per_sample) / min(per_sample))
     run = 'pooled' if test == 'auto' else test
+    if run == 'pooled' and ratio >= 3:
+        warnings.warn(f'Cells per sample differ about {ratio:.0f}-fold between the conditions (means '
+                      f'{per_sample[0]:.3g} and {per_sample[1]:.3g}). The pooled t-test on sample means rejected '
+                      "too often with a tenfold difference; test='welch' and test='mixed' held their level there.",
+                      UserWarning)
     single = sizes.max() == 1                        # one value per sample: no within-sample spread to describe
     if single and run in ('mixed', 'cells'):
         raise ValueError(f"test={run!r} needs more than one cell per sample; every sample has one value here. "
@@ -1374,5 +1426,6 @@ def compare_readout(values, samples, groups, test='auto', alpha=0.05, n_relabel=
                       "Use 'pooled' for inference.", UserWarning)
     return {'test': run, 'statistic': statistic, 'p_value': p, 'df': df, 'estimate': float(m1.mean() - m2.mean()),
             'condition_1': order[0], 'condition_2': order[1], 'n_samples': n_samples, 'n_cells': n_cells,
-            'n_dropped': n_dropped, 'suitable_tests': _suitable_tests(k), 'smallest_p': smallest,
+            'n_dropped': n_dropped, 'cells_per_sample_ratio': ratio, 'suitable_tests': _suitable_tests(k, ratio),
+            'smallest_p': smallest,
             'fallback': fallback, 'design_effect': deff}

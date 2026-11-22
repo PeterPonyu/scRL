@@ -1,3 +1,4 @@
+import itertools
 import sys
 import warnings
 
@@ -95,6 +96,123 @@ def test_relabel_unequal_sample_numbers_smallest_p():
         out = scRL.compare_readout(values, samples, groups, test='relabel')
     assert out['smallest_p'] == pytest.approx(1 / 35)
     assert out['p_value'] >= out['smallest_p']
+
+
+def _naive_relabel(values, samples, k1):
+    """Welch t of the sample mean ranks (first k1 samples against the rest) and its p-value over every relabelling,
+    one relabelling at a time."""
+    ranks = stats.rankdata(values)
+    mean_rank = pd.Series(ranks).groupby(np.asarray(samples)).mean().to_numpy()
+    k = len(mean_rank)
+
+    def t(first):
+        first = list(first)
+        return stats.ttest_ind(mean_rank[first], np.delete(mean_rank, first), equal_var=False).statistic
+
+    observed = t(range(k1))
+    reference = np.array([t(c) for c in itertools.combinations(range(k), k1)])
+    return observed, float(np.mean(np.abs(reference) >= abs(observed) - 1e-9))
+
+
+@pytest.mark.parametrize('k1', [4, 3])
+def test_relabel_statistic_is_the_welch_t_of_the_sample_mean_ranks(k1):
+    means = [0.3, 1.4, -0.2, 0.9, 0.1, 2.0, 0.6, 1.1]
+    values, samples, groups = _design(means, cells=[40, 3, 25, 6, 4, 30, 5, 12], sd=1, seed=4, k1=k1)
+    out = scRL.compare_readout(values, samples, groups, test='relabel')
+    statistic, p = _naive_relabel(values, samples, k1)
+    assert out['statistic'] == pytest.approx(statistic)
+    assert out['p_value'] == pytest.approx(p)
+    # not the difference of the cell-weighted mean ranks
+    ranks = stats.rankdata(values)
+    assert abs(out['statistic'] - (ranks[groups == 'a'].mean() - ranks[groups == 'b'].mean())) > 1
+
+
+def test_relabel_holds_its_level_when_one_condition_has_far_fewer_cells_per_sample():
+    # zero-inflated readout with a sample effect and no difference between the conditions, four samples against
+    # four, 150 to 250 cells per sample in one condition and 8 to 15 in the other
+    rng = np.random.default_rng(2026)
+    n_data = 300
+    condition = np.repeat(['a', 'b'], 4)
+    reject = 0
+    for _ in range(n_data):
+        sizes = np.r_[rng.integers(150, 251, 4), rng.integers(8, 16, 4)]
+        samples = np.repeat(np.arange(8), sizes)
+        effect = rng.normal(0, .5, 8)
+        values = np.where(rng.random(len(samples)) < .6, 0.0, np.exp(rng.normal(effect[samples], 1.0)))
+        reject += scRL.compare_readout(values, samples, condition[samples], test='relabel')['p_value'] < .05
+    rate = reject / n_data
+    print('relabel null rejection rate, tenfold difference in cells per sample', rate)
+    assert rate <= 0.09
+
+
+def test_relabel_statistic_is_infinite_when_the_sample_mean_ranks_vary_in_neither_condition():
+    values, samples, groups = _design([1, 1, 1, 2, 2, 2], cells=1)
+    with pytest.warns(UserWarning, match='cannot reject'):
+        out = scRL.compare_readout(values, samples, groups, test='relabel')
+    assert out['statistic'] == -np.inf
+    assert out['p_value'] == pytest.approx(2 / 20)      # the observed arrangement and its mirror image
+    with pytest.warns(UserWarning, match='cannot reject'):
+        swapped = scRL.compare_readout(values, samples, groups[::-1], test='relabel')
+    assert swapped['statistic'] == np.inf and swapped['p_value'] == pytest.approx(2 / 20)
+
+
+def test_relabel_statistic_is_zero_when_every_sample_has_the_same_mean_rank():
+    values = np.tile([0.0, 1.0], 6)
+    samples = np.repeat(np.arange(6), 2)
+    groups = np.repeat(['a', 'b'], 6)
+    with pytest.warns(UserWarning, match='cannot reject'):
+        out = scRL.compare_readout(values, samples, groups, test='relabel')
+    assert out['statistic'] == 0.0
+    assert out['p_value'] == 1.0
+
+
+def test_relabel_counts_infinite_statistics_as_more_extreme_than_a_finite_one():
+    # one value per sample; 2 of the 20 relabellings separate the ones from the twos and have an infinite statistic,
+    # the other 18 tie with the observed one in absolute value
+    values = np.array([1., 2., 1., 2., 1., 2.])
+    with pytest.warns(UserWarning, match='cannot reject'):
+        out = scRL.compare_readout(values, np.arange(6), np.repeat(['a', 'b'], 3), test='relabel')
+    assert np.isfinite(out['statistic']) and out['statistic'] < 0
+    assert out['statistic'] == pytest.approx(stats.ttest_ind([1.5, 5, 1.5], [5, 1.5, 5], equal_var=False).statistic)
+    assert out['p_value'] == 1.0
+
+
+def test_relabel_with_a_single_sample_in_a_condition_uses_the_difference_of_unweighted_mean_ranks():
+    # compare_readout refuses such a design, so the rule is tested on the function behind it
+    from scRL.ConditionCore import _relabel_test
+    values, samples, _ = _design([3.0, 0.2, 1.1, 0.5, 0.9], cells=[30, 4, 8, 5, 6], sd=1, seed=7)
+    codes = np.unique(samples, return_inverse=True)[1]
+    ranks = stats.rankdata(values)
+    mean_rank = np.bincount(codes, weights=ranks) / np.bincount(codes)
+    reference = np.array([mean_rank[i] - np.delete(mean_rank, i).mean() for i in range(5)])
+    for alone in range(5):
+        side = np.ones(5, dtype=int)
+        side[alone] = 0
+        statistic, p, smallest = _relabel_test(ranks, codes, side, 2000, 0)
+        assert statistic == pytest.approx(reference[alone])
+        assert p == pytest.approx(np.mean(np.abs(reference) >= abs(reference[alone]) - 1e-9))
+        assert smallest == pytest.approx(1 / 5)
+        mirrored = _relabel_test(ranks, codes, 1 - side, 2000, 0)
+        assert mirrored[0] == pytest.approx(-reference[alone]) and mirrored[1] == pytest.approx(p)
+
+
+@pytest.mark.parametrize('k1, k, smallest', [(4, 8, 2 / 70), (3, 6, 2 / 20), (3, 7, 1 / 35), (2, 7, 1 / 21),
+                                             (5, 7, 1 / 21)])
+def test_relabel_smallest_p_is_attained_and_never_undercut(k1, k, smallest):
+    rng = np.random.default_rng(k1 * 10 + k)
+    sizes = rng.integers(3, 30, k)
+    samples = np.repeat(np.arange(k), sizes)
+    values = np.repeat(rng.normal(0, 1, k), sizes) + rng.normal(0, 1, sizes.sum())
+    ps = []
+    for first in itertools.combinations(range(k), k1):
+        groups = np.where(np.isin(samples, first), 'a', 'b')
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            out = scRL.compare_readout(values, samples, groups, test='relabel')
+        assert out['smallest_p'] == pytest.approx(smallest)
+        ps.append(out['p_value'])
+    assert min(ps) == pytest.approx(smallest)
+    assert max(ps) == pytest.approx(1.0)
 
 
 def test_relabel_random_branch_agrees_with_exhaustive():
@@ -230,6 +348,72 @@ def test_auto_is_pooled_and_suitable_tests():
         assert auto['suitable_tests'] == expect
     assert 'mixed' not in scRL.compare_readout(*_design(list(range(6)), sd=1))['suitable_tests']
     assert 'relabel' not in scRL.compare_readout(*_design(list(range(8)), sd=1))['suitable_tests']
+
+
+def _uneven(k, cells_a, cells_b, seed=0):
+    """k samples, half in each condition, with the given numbers of cells per sample in 'a' and in 'b'."""
+    cells = [cells_a] * (k // 2) + [cells_b] * (k - k // 2)
+    return _design(list(np.arange(k) * 0.3), cells=cells, sd=1, seed=seed)
+
+
+def test_cells_per_sample_ratio_is_the_larger_mean_over_the_smaller():
+    values, samples, groups = _design(list(range(8)), cells=[10, 10, 12, 8, 2, 4, 2, 4], sd=1)
+    with pytest.warns(UserWarning):
+        out = scRL.compare_readout(values, samples, groups)
+    assert out['n_cells'] == (40, 12)
+    assert out['cells_per_sample_ratio'] == pytest.approx(10 / 3)
+    with pytest.warns(UserWarning):
+        swapped = scRL.compare_readout(values, samples, np.where(groups == 'a', 'b', 'a'))
+    assert swapped['cells_per_sample_ratio'] == pytest.approx(10 / 3)
+    assert type(out['cells_per_sample_ratio']) is float
+    even = scRL.compare_readout(*_design(list(range(6)), cells=3, sd=1))
+    assert even['cells_per_sample_ratio'] == 1.0
+    one_each = scRL.compare_readout(np.arange(8.0) ** 2, np.arange(8), np.repeat(['a', 'b'], 4))
+    assert one_each['cells_per_sample_ratio'] == 1.0
+
+
+@pytest.mark.parametrize('test', ['auto', 'pooled'])
+def test_pooled_warns_when_cells_per_sample_differ_between_conditions_and_still_runs(test):
+    values, samples, groups = _uneven(8, 50, 5)
+    with pytest.warns(UserWarning, match='differ about 10-fold') as rec:
+        out = scRL.compare_readout(values, samples, groups, test=test)
+    message = ' '.join(str(r.message) for r in rec)
+    assert "test='welch'" in message and "test='mixed'" in message and 'tenfold' in message
+    assert out['test'] == 'pooled'
+    means = pd.Series(values).groupby(samples).mean().to_numpy()
+    assert out['p_value'] == pytest.approx(stats.ttest_ind(means[:4], means[4:]).pvalue)
+    values, samples, groups = _uneven(8, 6, 2)          # exactly threefold
+    with pytest.warns(UserWarning, match='differ about 3-fold'):
+        assert scRL.compare_readout(values, samples, groups, test=test)['test'] == 'pooled'
+
+
+def test_no_cells_per_sample_warning_below_threefold_or_for_the_other_tests():
+    with warnings.catch_warnings():
+        warnings.simplefilter('error')
+        values, samples, groups = _uneven(8, 29, 10)
+        for t in ('auto', 'pooled'):
+            assert scRL.compare_readout(values, samples, groups, test=t)['cells_per_sample_ratio'] == pytest.approx(2.9)
+        values, samples, groups = _uneven(8, 50, 5)
+        for t in ('welch', 'relabel'):
+            assert scRL.compare_readout(values, samples, groups, test=t)['cells_per_sample_ratio'] == pytest.approx(10)
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter('always')
+        scRL.compare_readout(values, samples, groups, test='mixed')
+        with pytest.warns(UserWarning, match='independent unit'):
+            scRL.compare_readout(values, samples, groups, test='cells')
+    assert not any('differ about' in str(r.message) for r in rec)
+
+
+def test_suitable_tests_name_welch_in_place_of_pooled_when_cells_per_sample_differ_threefold():
+    for k, expect in [(6, ['welch']), (8, ['welch', 'mixed']), (10, ['welch', 'relabel', 'mixed'])]:
+        for cells_a, cells_b in ((6, 2), (2, 6), (40, 4)):
+            with pytest.warns(UserWarning, match='differ about'):
+                out = scRL.compare_readout(*_uneven(k, cells_a, cells_b, seed=k))
+            assert out['test'] == 'pooled'
+            assert out['suitable_tests'] == expect
+            assert scRL.compare_readout(*_uneven(k, cells_a, cells_b, seed=k), test='welch')['suitable_tests'] == expect
+        below = scRL.compare_readout(*_uneven(k, 29, 10, seed=k))
+        assert below['suitable_tests'] == ['pooled'] + expect[1:]
 
 
 def test_level_of_pooled_and_relabel_under_clustered_null():

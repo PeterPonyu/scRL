@@ -784,7 +784,10 @@ def test_design_effect_independent_values():
     values, samples = _clustered(10, 200, 0.0, 0)
     out = scRL.design_effect(values, samples)
     assert abs(out['icc']) < .02
-    assert .05 <= out['predicted_false_call_rate'] < .15
+    assert .05 <= out['predicted_false_call_rate_normal'] < .15
+    c = stats.norm.ppf(.975) / np.sqrt(out['design_effect'])
+    assert out['predicted_false_call_rate'] == pytest.approx(2 * stats.t.sf(c * np.sqrt(8) / np.sqrt(9 - c ** 2), 8))
+    assert .03 < out['predicted_false_call_rate'] < out['predicted_false_call_rate_normal']
 
 
 def test_design_effect_strong_clustering():
@@ -803,7 +806,8 @@ def test_design_effect_exact_arithmetic():
     assert out['cells_per_sample'] == pytest.approx(3)
     assert out['icc'] == pytest.approx(icc)
     assert out['design_effect'] == pytest.approx(deff)
-    assert out['predicted_false_call_rate'] == pytest.approx(2 * (1 - stats.norm.cdf(z / np.sqrt(deff))))
+    assert out['predicted_false_call_rate_normal'] == pytest.approx(2 * (1 - stats.norm.cdf(z / np.sqrt(deff))))
+    assert out['predicted_false_call_rate'] == out['predicted_false_call_rate_normal']      # two samples
     assert out['effective_cells_per_sample'] == pytest.approx(3 / deff)
     assert out['alpha'] == .05 and out['scale'] == 'raw'
     assert all(type(out[k]) in (int, float, str) for k in out)
@@ -837,7 +841,8 @@ def test_design_effect_drops_missing_values():
     clean = scRL.design_effect(values[keep], samples[keep])
     assert out['n_dropped'] == 3 and clean['n_dropped'] == 0
     assert out['n_cells'] == 117
-    for k in ('icc', 'design_effect', 'predicted_false_call_rate', 'cells_per_sample'):
+    for k in ('icc', 'design_effect', 'predicted_false_call_rate', 'predicted_false_call_rate_normal',
+              'cells_per_sample'):
         assert out[k] == pytest.approx(clean[k])
 
 
@@ -869,6 +874,48 @@ def test_design_effect_predicts_the_false_call_rate_of_a_cell_level_test():
         a, b = values[order[:8]].ravel(), values[order[8:]].ravel()
         calls += stats.mannwhitneyu(a, b, alternative='two-sided').pvalue < .05
     assert abs(calls / 400 - predicted) < .12
+
+
+def test_design_effect_few_sample_rate_against_the_t_distribution_written_out():
+    values, samples = _clustered(8, 100, .37, 34)
+    out = scRL.design_effect(values, samples)
+    deff, k = out['design_effect'], 8
+    assert out['n_samples'] == k and deff == pytest.approx(13, abs=1)
+    c = stats.norm.ppf(.975) / np.sqrt(deff)
+    expected = 2 * stats.t.sf(c * np.sqrt(k - 2) / np.sqrt(k - 1 - c ** 2), k - 2)
+    assert out['predicted_false_call_rate'] == pytest.approx(expected)
+    assert out['predicted_false_call_rate_normal'] == pytest.approx(2 * stats.norm.sf(c))
+    assert .02 < out['predicted_false_call_rate'] - out['predicted_false_call_rate_normal'] < .06
+
+
+def test_few_sample_rate_formula():
+    rate = scRL.ConditionCore._few_sample_rate
+    z = stats.norm.ppf(.975)
+    c = z / np.sqrt(13)
+    assert rate(c, 8) == pytest.approx(2 * stats.t.sf(c * np.sqrt(6) / np.sqrt(7 - c * c), 6))
+    assert rate(c, 8) == pytest.approx(0.6256, abs=5e-4)
+    assert rate(c, 3) == pytest.approx(2 * stats.t.sf(c / np.sqrt(2 - c * c), 1))
+    assert rate(z, 4) == 0.0                           # c squared above k - 1
+    assert rate(2.0, 5) == 0.0 and 0 < rate(2.0 - 1e-6, 5) < 1e-3     # c squared equal to k - 1, and just below
+    assert rate(0.0, 5) == 1.0
+    assert all(rate(c, k) > rate(c, k + 1) for k in range(3, 40))    # falls towards the normal value
+    assert rate(c, 4000) == pytest.approx(2 * stats.norm.sf(c), abs=1e-4)
+
+
+def test_design_effect_few_sample_rate_is_zero_for_four_samples_without_clustering():
+    values, samples = _clustered(4, 200, 0.0, 3)
+    out = scRL.design_effect(values, samples)
+    assert out['design_effect'] < 1.2
+    assert out['predicted_false_call_rate'] == 0.0
+    assert .05 <= out['predicted_false_call_rate_normal'] < .08
+
+
+def test_design_effect_few_sample_rate_tends_to_the_normal_form_with_many_samples():
+    values, samples = _clustered(400, 20, .5, 5)
+    out = scRL.design_effect(values, samples)
+    assert out['n_samples'] == 400 and out['design_effect'] > 3
+    gap = out['predicted_false_call_rate'] - out['predicted_false_call_rate_normal']
+    assert 0 < gap < .005
 
 
 def test_design_effect_is_exported():
