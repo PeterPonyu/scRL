@@ -1,4 +1,6 @@
 """Compare two conditions (for example control and treated cells) on one grid."""
+import itertools
+import math
 import warnings
 
 import numpy as np
@@ -1125,3 +1127,214 @@ def design_effect(values, samples, alpha=0.05, scale='rank'):
             'predicted_false_call_rate': float(2 * (1 - stats.norm.cdf(z / np.sqrt(deff)))),
             'effective_cells_per_sample': float(m / deff), 'alpha': float(alpha), 'scale': scale,
             'n_dropped': n_dropped}
+
+
+def _readout_cells(values, samples, groups):
+    """Align the three per-cell inputs, drop cells with a missing entry and fix the order of the two conditions."""
+    x = np.asarray(values, dtype=float).ravel()
+    s = np.asarray(samples, dtype=object).ravel()
+    g_in = groups
+    g = np.asarray(g_in, dtype=object).ravel()
+    if not (len(x) == len(s) == len(g)):
+        raise ValueError(f'values, samples and groups must have one entry per cell; got {len(x)}, {len(s)} and {len(g)}.')
+    keep = ~np.isnan(x) & ~np.asarray(pd.isna(s), dtype=bool) & ~np.asarray(pd.isna(g), dtype=bool)
+    if isinstance(g_in, (pd.Series, pd.Index)) and isinstance(g_in.dtype, pd.CategoricalDtype):
+        order = list(g_in.cat.categories)
+    else:
+        order = sorted(set(g[keep]), key=str)
+    present = set(g[keep])
+    order = [c for c in order if c in present]
+    if len(order) != 2:
+        raise ValueError(f'groups must take exactly two values among the kept cells; found {len(order)}.')
+    x, s, g = x[keep], s[keep].astype(str), g[keep]
+    if not np.isfinite(x).all():
+        raise ValueError('values must be finite or missing; set infinite values to NaN to leave those cells out.')
+    side = (g == order[1]).astype(int)               # 0 for condition 1, 1 for condition 2
+    names, codes = np.unique(s, return_inverse=True)
+    both = np.bincount(codes, weights=side) / np.bincount(codes)
+    if ((both > 0) & (both < 1)).any():
+        raise ValueError('every sample must lie in exactly one condition; '
+                         f'{names[(both > 0) & (both < 1)].tolist()} appear in both.')
+    side_of_sample = np.rint(both).astype(int)
+    k1, k2 = int((side_of_sample == 0).sum()), int((side_of_sample == 1).sum())
+    if min(k1, k2) < 2:
+        raise ValueError(f'each condition needs at least two samples; found {k1} and {k2}.')
+    return x, codes, side_of_sample, order, int((~keep).sum())
+
+
+def _suitable_tests(k):
+    """The tests the guidance of compare_readout names for k samples in total."""
+    if k < 7:
+        return ['pooled']
+    return ['pooled', 'mixed'] if k < 9 else ['pooled', 'relabel', 'mixed']
+
+
+def _relabel_test(ranks, codes, side_of_sample, n_relabel, seed):
+    """Mean-rank difference, its relabelling p-value and the smallest p the procedure could return."""
+    k = len(side_of_sample)
+    n = np.bincount(codes).astype(float)
+    r = np.bincount(codes, weights=ranks)
+    k1 = int((side_of_sample == 0).sum())
+    total_n, total_r = n.sum(), r.sum()
+
+    def stat(member):                                # member: (..., k) 0/1 indicator of condition 1
+        n1, r1 = member @ n, member @ r
+        return r1 / n1 - (total_r - r1) / (total_n - n1)
+
+    observed = float(stat((side_of_sample == 0).astype(float)))
+    n_distinct = math.comb(k, k1)
+    if n_distinct <= n_relabel:
+        sets = np.array(list(itertools.combinations(range(k), k1)))
+        member = np.zeros((len(sets), k))
+        np.put_along_axis(member, sets, 1.0, axis=1)
+        smallest = (2 if 2 * k1 == k else 1) / n_distinct
+        extra = 0
+    else:
+        rng = np.random.default_rng(seed)
+        member = np.zeros((n_relabel, k))
+        for row in member:
+            row[rng.choice(k, size=k1, replace=False)] = 1.0
+        smallest = 1 / (n_relabel + 1)
+        extra = 1                                    # the observed relabelling joins the random ones
+    s = stat(member)
+    hits = int((np.abs(s) >= abs(observed) - 1e-12).sum()) + extra
+    p = hits / (len(s) + extra)
+    return observed, float(min(p, 1.0)), float(smallest)
+
+
+def _mixed_test(ranks, codes, side_of_sample, max_cells, seed):
+    """Condition effect on rank-based normal scores with a random intercept per sample, by REML."""
+    try:
+        from statsmodels.regression.mixed_linear_model import MixedLM
+    except ImportError as err:
+        raise ImportError("test='mixed' needs the package statsmodels, which is not installed; install it or use "
+                          "test='pooled'.") from err
+    N = len(ranks)
+    scores = stats.norm.ppf((ranks - 0.5) / N)
+    rng = np.random.default_rng(seed)
+    rows = []
+    for c in range(len(side_of_sample)):
+        idx = np.flatnonzero(codes == c)
+        rows.append(idx if len(idx) <= max_cells else np.sort(rng.choice(idx, size=max_cells, replace=False)))
+    rows = np.concatenate(rows)
+    exog = np.column_stack([np.ones(len(rows)), (side_of_sample[codes[rows]] == 0).astype(float)])
+    model = MixedLM(scores[rows], exog, groups=codes[rows])
+    for method in (None, 'lbfgs', 'powell'):
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            try:
+                fit = model.fit(reml=True, **({} if method is None else {'method': method}))
+            except (np.linalg.LinAlgError, ValueError, FloatingPointError):
+                continue
+        if getattr(fit, 'converged', False) and np.isfinite(fit.bse[1]) and fit.bse[1] > 0:
+            return float(fit.params[1] / fit.bse[1])
+    raise RuntimeError("the mixed model did not converge with any of the optimisers tried; use test='pooled'.")
+
+
+def compare_readout(values, samples, groups, test='auto', alpha=0.05, n_relabel=2000, max_cells=300, seed=0):
+    """
+    Compare a per-cell readout between two conditions with the sample (animal, donor) as the unit.
+
+    Cells from one sample resemble each other, so a test over cells overstates how much evidence a handful of
+    animals gives (see ``design_effect``). The tests here take the sample as the unit:
+
+    - ``'pooled'``: the two-sample t-test with pooled variance on the per-sample means of the readout.
+    - ``'welch'``: the Welch t-test (unequal variances) on the per-sample means.
+    - ``'relabel'``: the difference between the mean rank of the cells of condition 1 and of condition 2 (average
+      ranks over all kept cells), referred to the distribution obtained by relabelling whole samples between the
+      conditions, keeping the numbers of samples. All distinct relabellings are used when there are at most
+      ``n_relabel``; otherwise ``n_relabel`` random ones (seeded) plus the observed one. The p-value is the share
+      of relabellings whose absolute statistic is at least the observed one (tolerance 1e-12).
+    - ``'mixed'``: a linear mixed model, fitted by restricted maximum likelihood (statsmodels, imported only when
+      this test is asked for), on the rank-based normal scores of the readout with a fixed condition effect and a
+      random intercept per sample; the effect over its standard error is referred to a t distribution with
+      (number of samples - 2) degrees of freedom. At most ``max_cells`` cells per sample, a seeded random subset,
+      enter the model. If the default optimiser does not converge, 'lbfgs' and then 'powell' are tried; if none
+      converges a ``RuntimeError`` is raised.
+    - ``'cells'``: the Mann-Whitney test over cells (asymptotic, tie-corrected). It is provided only so that the
+      result of treating cells as units can be seen; it warns every time and names the false-positive rate that
+      ``design_effect`` predicts for it (computed on the ranks of all kept cells).
+    - ``'auto'``: the same as ``'pooled'``.
+
+    Guidance on the number of samples (all conditions together). It comes from planted shifts on a limited number
+    of designs and is not a statement about every design: with fewer than seven samples, only the pooled t-test on
+    sample means; with seven or eight, the pooled t-test by default, with the mixed model as an alternative; from
+    nine, the relabelling test or the mixed model are also suitable. The t-test on sample means is the default
+    because it held its nominal level in every setting examined. With three samples per condition no test beyond
+    it could be shown to hold its level, and the relabelling test cannot reject at 0.05 (its smallest attainable
+    p-value is 0.1). No claim is made that any test is best in general.
+
+    Parameters
+    ----------
+    values
+        One number per cell (a pseudotime, a fate probability, a signature score); array-like or Series.
+    samples
+        The sample (animal, donor, library) of each cell.
+    groups
+        The condition of each cell; exactly two values, and every sample must lie in exactly one condition. A
+        categorical fixes the order of the two conditions; otherwise they are sorted. At least two samples per
+        condition are needed.
+    test
+        'auto', 'pooled', 'welch', 'relabel', 'mixed' or 'cells'. (Default: 'auto')
+    alpha
+        Level used for the warning of the relabelling test and for the predicted false-positive rate of
+        ``design_effect``; between 0 and 1, exclusive. (Default: 0.05)
+    n_relabel
+        Number of relabellings above which the relabelling test samples instead of enumerating. (Default: 2000)
+    max_cells
+        Cells per sample used by the mixed model. (Default: 300)
+    seed
+        Seed of the random relabellings and of the cell subsets of the mixed model. (Default: 0)
+
+    Returns
+    ----------
+    A plain ``dict`` with ``test`` (the one run), ``statistic``, ``p_value`` (two-sided), ``df`` (None where it
+    does not apply), ``estimate`` (the difference of the per-sample means, condition 1 minus condition 2, on the
+    readout's own scale, for every test), ``condition_1`` and ``condition_2``, ``n_samples`` and ``n_cells`` (a
+    tuple per condition), ``n_dropped`` (cells left out for a missing value, sample or group),
+    ``suitable_tests`` (the tests the guidance above names for this number of samples), ``smallest_p`` (the
+    smallest p-value the relabelling test could return; None for the other tests) and ``design_effect`` (the
+    dict returned by ``design_effect`` for the kept cells, which states the within-sample correlation). Infinite
+    values must be set to NaN first.
+    """
+    tests = ('auto', 'pooled', 'welch', 'relabel', 'mixed', 'cells')
+    if test not in tests:
+        raise ValueError(f'test must be one of {tests}, not {test!r}.')
+    if not 0 < alpha < 1:
+        raise ValueError(f'alpha must lie between 0 and 1 (exclusive), not {alpha!r}.')
+    x, codes, side, order, n_dropped = _readout_cells(values, samples, groups)
+    k = len(side)
+    n_samples = (int((side == 0).sum()), int((side == 1).sum()))
+    cell_side = side[codes]
+    n_cells = (int((cell_side == 0).sum()), int((cell_side == 1).sum()))
+    sizes = np.bincount(codes)
+    means = np.bincount(codes, weights=x) / sizes
+    m1, m2 = means[side == 0], means[side == 1]
+    ranks = stats.rankdata(x, method='average')
+    deff = design_effect(x, codes, alpha=alpha)
+    df, smallest = None, None
+    run = 'pooled' if test == 'auto' else test
+    if run in ('pooled', 'welch'):
+        res = stats.ttest_ind(m1, m2, equal_var=run == 'pooled')
+        statistic, p = float(res.statistic), float(res.pvalue)
+        df = float(res.df) if run == 'welch' else float(k - 2)
+    elif run == 'relabel':
+        statistic, p, smallest = _relabel_test(ranks, codes, side, n_relabel, seed)
+        if smallest > alpha:
+            warnings.warn(f'The relabelling test cannot reject at level {alpha} with {n_samples[0]} and '
+                          f'{n_samples[1]} samples: its smallest attainable p-value is {smallest:.3g}.', UserWarning)
+    elif run == 'mixed':
+        statistic = _mixed_test(ranks, codes, side, max_cells, seed)
+        df = float(k - 2)
+        p = float(2 * stats.t.sf(abs(statistic), df))
+    else:
+        res = stats.mannwhitneyu(x[cell_side == 0], x[cell_side == 1], method='asymptotic')
+        statistic, p = float(res.statistic), float(res.pvalue)
+        warnings.warn("test='cells' treats every cell as an independent unit; given the within-sample correlation "
+                      f"of these data its predicted false-positive rate at level {alpha} is "
+                      f"{deff['predicted_false_call_rate']:.3g} when the conditions do not differ. "
+                      "Use 'pooled' for inference.", UserWarning)
+    return {'test': run, 'statistic': statistic, 'p_value': p, 'df': df, 'estimate': float(m1.mean() - m2.mean()),
+            'condition_1': order[0], 'condition_2': order[1], 'n_samples': n_samples, 'n_cells': n_cells,
+            'n_dropped': n_dropped, 'suitable_tests': _suitable_tests(k), 'smallest_p': smallest,
+            'design_effect': deff}
