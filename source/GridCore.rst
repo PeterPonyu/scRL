@@ -35,6 +35,7 @@ GridCore
     scRL.FateCore.fate_probabilities
     scRL.FateCore.fate_over_runs
     scRL.CorridorCore.fate_corridors
+    scRL.CorridorCore.fate_decisions
     scRL.CorridorCore.corridor_profile
     scRL.CorridorCore.plot_corridors
     scRL.ConditionCore.project_conditions

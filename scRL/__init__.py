@@ -10,7 +10,7 @@ from .ExactCore import exact_values, exact_trajectories
 from .FateCore import fate_gate, fate_probabilities, fate_over_runs
 from .GridNDCore import place_cells, project_cells
 from .EnvironmentNDCore import reachability
-from .CorridorCore import fate_corridors, corridor_profile, plot_corridors
+from .CorridorCore import fate_corridors, fate_decisions, corridor_profile, plot_corridors
 from .ConditionCore import (project_conditions, compare_abundance, condition_grid, compare_values,
                             compare_fates, shares_by_sample, design_effect)
 from .PlotCore import (plot_grids, plot_slices, plot_views, plot_trend, plot_clusters, plot_policy,
@@ -33,7 +33,7 @@ __all__ = ['grids_from_embedding', 'align_pseudotime', 'project_cluster', 'proje
            , 'place_cells', 'project_cells'
            , 'project_conditions', 'compare_abundance', 'condition_grid', 'compare_values', 'compare_fates', 'shares_by_sample', 'design_effect'
            , 'plot_fates', 'plot_conditions', 'plot_mesh', 'plot_trajectories', 'plot_voxels'
-           , 'fate_corridors', 'corridor_profile', 'plot_corridors'
+           , 'fate_corridors', 'fate_decisions', 'corridor_profile', 'plot_corridors'
            # Backward compatibility
            , 'lineage_rewards', 'gene_rewards', 'project_expression']
 

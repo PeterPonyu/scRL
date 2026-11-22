@@ -222,6 +222,136 @@ def fate_corridors(gres, ends, start, weights='cells', forward=.25, policy=None,
                          'start_cells': float(_cell_counts(gres)[mu > 0].sum())}, index=pd.Index(names, name='lineage'))
 
 
+def _decision_terms(P, owner, mu):
+    """
+    Fate potentials, decision intensities and visits of the walk ``P`` whose end points (``owner`` >= 0) absorb it.
+
+    Returns the fate potentials H (points x lineages), the decision intensities d (the variance of the one-step
+    change of H over the moves of the walk, zero at end points and at points that cannot reach a lineage), the
+    expected visits g from the start distribution ``mu`` and the mask of transient points that can reach a lineage.
+    Moves into grid parts without an end point count as a move to a point whose fate potential is 0, so that
+    h (1 - h) = (I - Q)^-1 d holds for every transient point, with Q the moves among the points that can arrive.
+    """
+    M, L = P.shape[0], int(owner.max()) + 1
+    absorbing = owner >= 0
+    ok = _reaching(P, absorbing) & ~absorbing
+    idx = np.flatnonzero(ok)
+    lu = splu((sparse.identity(len(idx), format='csc') - P[idx][:, idx]).tocsc())
+    to_end = P[idx]
+    B = np.column_stack([np.asarray(to_end[:, owner == i].sum(1)).ravel() for i in range(L)])
+    H = np.zeros((M, L))
+    H[idx] = lu.solve(B)
+    for i in range(L):
+        H[owner == i, i] = 1.0
+    g = np.zeros(M)
+    g[idx] = lu.solve(mu[idx], trans='T')
+    coo = P.tocoo()
+    move = ok[coo.row]
+    rows, cols, w = coo.row[move], coo.col[move], coo.data[move]
+    d = np.zeros((M, L))
+    for i in range(L):
+        d[:, i] = np.bincount(rows, weights=w * (H[cols, i] - H[rows, i]) ** 2, minlength=M)
+    return H, d, g, ok
+
+
+def fate_decisions(gres, ends, start, weights='cells', forward=.25, policy=None, key_add='decision'):
+    """
+    Where on the grid each lineage's fate is decided: the one-step variance of the fate potential, and its
+    visit-weighted map from a start region.
+
+    The walk, its end points and the start region are those of ``fate_corridors``. For lineage l with fate
+    potential h_l (the probability that a walk from a grid point ends in l), the decision intensity at a transient
+    grid point p is d_l(p) = sum_q P(p, q) (h_l(q) - h_l(p))^2, the variance of the one-step change of h_l (its mean
+    is zero, because h_l is harmonic). It measures how much of the choice for l is made by one move from p, and is
+    zero at the end points and wherever only one outcome for l remains open. Along a walk the intensities add up
+    to the uncertainty: for every transient point that can reach a lineage, h_l(p) (1 - h_l(p)) = sum_q G(p, q)
+    d_l(q), with G = (I - Q)^-1 the expected visits among the transient points that can reach a lineage. Walks that
+    enter a part of the grid without an end point are lost; a move into such a part counts as a move to a point
+    whose fate potential is 0 (the lost walks are a further outcome, not one of the lineages), and the identity then
+    holds for the matrix of the walk as it is. When all walks arrive it is the variance decomposition of the
+    outcome indicator of l.
+
+    The decision map of the start region is D_l(p) = g(p) d_l(p), with g(p) the expected number of visits to p by a
+    walk from the start region (as in ``fate_corridors``). It sums over the grid to the variance of the outcome
+    indicator of l from the start region, sum_p mu(p) h_l(p) (1 - h_l(p)), with mu the start weights: the share of
+    that variance spent at each grid point. In reinforcement-learning terms d_l is the variance of the
+    temporal-difference target of the value h_l under the walk.
+
+    Parameters
+    ----------
+    gres
+        Grids results after ``project_cluster`` and ``align_pseudotime``.
+    ends
+        Dict lineage name -> end cluster(s), as in ``fate_corridors``.
+    start
+        The start region, as in ``fate_corridors``.
+    weights
+        'cells' or 'uniform' weights of the start grid points, as in ``fate_corridors``.
+        (Default: 'cells')
+    forward
+        Forward bias of the walk, as in ``fate_probabilities``.
+        (Default: 0.25)
+    policy
+        Move probabilities instead of the walk, as in ``fate_corridors``.
+        (Default: None)
+    key_add
+        Prefix of the stored results.
+        (Default: 'decision')
+
+    Returns
+    ----------
+    DataFrame, one row per lineage: probability that a walk from the start region ends in the lineage, the
+    variance of its outcome indicator from the start region (the total of the decision map) and the start
+    region's size. Stored on the grid: ``<key_add>_intensity`` and ``<key_add>`` (tables of the decision
+    intensity and the decision map, kept grid points x lineages), ``<key_add>_intensity_<name>`` and
+    ``<key_add>_<name>`` (the same per lineage, also brought to the cells), ``<key_add>_total`` (the decision map
+    summed over the lineages, also for the cells), ``<key_add>_start`` (start weights) and ``<key_add>_settings``.
+    """
+    from .GridCore import project_back
+    from .GridNDCore import is_nd, lattice_from_scan
+    if 'mapped_grids_clusters' not in gres.grids:
+        raise KeyError('No clusters on the grid: call project_cluster first.')
+    names, owner = _lineages(gres, ends)
+    clash = [n for n in names if n in ('intensity', 'total', 'start', 'settings')]
+    if clash:
+        raise ValueError(f'Lineage name(s) {clash} are reserved for the stored results; choose other names.')
+    if policy is None and forward != 0 and 'pseudotime' not in gres.grids:
+        raise KeyError('The walk is biased toward later pseudotime: call align_pseudotime first (or forward=0).')
+    lattice = gres if is_nd(gres) else lattice_from_scan(gres)
+    P = _walk(gres, lattice.grids['neighbors'], forward, policy)
+    mu = _start_distribution(gres, start, weights, owner)
+    trapped = (mu > 0) & ~_reaching(P, owner >= 0) & (owner < 0)
+    if trapped.any():
+        warnings.warn(f'{trapped.sum()} start grid point(s) cannot reach any lineage and are left out.',
+                      UserWarning, stacklevel=2)
+        mu = np.where(trapped, 0, mu)
+        if mu.sum() == 0:
+            raise ValueError('No start grid point can reach a lineage.')
+        mu = mu / mu.sum()
+    H, d, g, ok = _decision_terms(P, owner, mu)
+    D = g[:, None] * d
+    mapped = np.asarray(gres.grids['mapped_grids'])
+    for i, n in enumerate(names):
+        gres.grids[f'{key_add}_intensity_{n}'] = d[:, i]
+        project_back(gres, f'{key_add}_intensity_{n}', negative=True)
+        gres.grids[f'{key_add}_{n}'] = D[:, i]
+        project_back(gres, f'{key_add}_{n}', negative=True)
+    gres.grids[f'{key_add}_intensity'] = pd.DataFrame(d, index=mapped, columns=names)
+    gres.grids[f'{key_add}'] = pd.DataFrame(D, index=mapped, columns=names)
+    gres.grids[f'{key_add}_total'] = D.sum(1)
+    project_back(gres, f'{key_add}_total', negative=True)
+    gres.grids[f'{key_add}_start'] = mu
+    gres.grids[f'{key_add}_settings'] = dict(names=names, start=start if not isinstance(start, np.ndarray)
+                                             else 'mask', weights=weights, forward=forward,
+                                             policy=policy is not None)
+    prob = mu @ H
+    if prob.sum() < .99:
+        warnings.warn(f'Walks from the start region end in a listed lineage with probability {prob.sum():.3f}; the '
+                      'rest stay on grid parts without an end point.', UserWarning, stacklevel=2)
+    return pd.DataFrame({'probability': prob, 'variance': mu @ (H * (1 - H)), 'start_points': int((mu > 0).sum())},
+                        index=pd.Index(names, name='lineage'))
+
+
 def _stored(gres, key_add):
     if f'{key_add}_settings' not in gres.grids:
         raise KeyError(f'No corridors under {key_add!r}: call fate_corridors(key_add={key_add!r}) first.')
