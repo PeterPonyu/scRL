@@ -1076,12 +1076,13 @@ def design_effect(values, samples, alpha=0.05, scale='rank', groups=None):
     and 0 when ``c**2 >= k - 1``. It tends to the normal form as the number of samples grows. On designs of
     four to eleven animals the few-sample form was closer to the observed rate of a cell-level rank-sum test
     than the normal form, which ran low there; that check is an indication only, and neither form is a
-    calibrated estimate. The two forms answer different questions. The few-sample form is for a correlation
-    estimated from the same ``k`` samples, as here: the spread between the samples is then itself estimated from
-    few samples, which is why the reference is t and not normal, and the rate it gives is the one over divisions
-    of the samples in hand. For a correlation known from elsewhere, as when a study is planned, the normal form
-    applies. Near a design effect of 1 neither form is accurate, because a negative estimate of the correlation
-    is set to zero; there the few-sample form can fall below ``alpha`` (to 0 for four samples at ``alpha`` 0.05).
+    calibrated estimate. The two forms differ in what they take as known. The few-sample form is for a
+    correlation estimated from few samples, whether the study's own (as here) or those of another study: the
+    spread between samples is then itself an estimate, which is why the reference is t and not normal. The
+    normal form is for a correlation that is effectively known. Either way the value describes a typical
+    study; the rate of one study varies widely with the samples it happens to hold. Near a design effect of 1
+    neither form is accurate, because a negative estimate of the correlation is set to zero; there the
+    few-sample form can fall below ``alpha`` (to 0 for four samples at ``alpha`` 0.05).
 
     When the samples belong to conditions that may differ, a difference between the conditions adds to the
     spread between the sample means and is counted as resemblance within samples. Without ``groups`` the
