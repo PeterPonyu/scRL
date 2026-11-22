@@ -1064,7 +1064,9 @@ def design_effect(values, samples, alpha=0.05, scale='rank'):
     values
         One number per cell (for example a fate probability or a pseudotime); array-like or pandas Series.
         Cells with a missing value are dropped together with their sample label. With ``scale='raw'`` the
-        remaining values must be finite.
+        remaining values must be finite. With ``scale='rank'`` an infinite value is kept and ranked as the
+        largest (or smallest) value; set infinite values to NaN first to leave those cells out (for example
+        cells a pseudotime could not reach).
     samples
         One label per cell naming its replicate (animal, donor, library). Cells with a missing label are
         dropped.

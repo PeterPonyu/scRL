@@ -899,3 +899,14 @@ def test_design_effect_drops_cells_without_a_sample():
     ref = scRL.design_effect([1., 2., 3., 5., 6., 7.], list('aaabbb'), scale='raw')
     assert out['n_samples'] == 2 and out['n_dropped'] == 2
     assert out['icc'] == pytest.approx(ref['icc'])
+
+
+def test_design_effect_ranks_infinite_values_and_says_how_to_drop_them():
+    """On the rank scale an infinite value is the largest rank; set it to NaN to leave the cell out."""
+    values = np.array([1., 2., 3., np.inf, 5., 6., 7., 8.])
+    samples = list('aaaabbbb')
+    kept = scRL.design_effect(values, samples)
+    assert kept['n_cells'] == 8 and kept['n_dropped'] == 0
+    dropped = scRL.design_effect(np.where(np.isfinite(values), values, np.nan), samples)
+    assert dropped['n_cells'] == 7 and dropped['n_dropped'] == 1
+    assert 'infinite' in scRL.design_effect.__doc__
