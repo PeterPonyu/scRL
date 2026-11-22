@@ -157,6 +157,8 @@ scRL.plot_fates(gres)
 
 `scRL.fate_probabilities(gres, {'lineage 0': '0', 'lineage 3': '3'})` gives instead, for every grid point, the share of walks on the grid that enter each lineage first within a fixed number of moves (walks that arrive at no listed lineage are counted as 'none'), drawn with `scRL.plot_fates(gres, key_add='fate')`. By default the walk has a mild bias toward later pseudotime (`forward=0.25`) and 5,000 moves to arrive. At `forward=1` a move one median pseudotime step later weighs about seven times (e squared) one the same step earlier, so walks turn back toward a neighbouring branch less often; a smaller value lets them do so more often, which can keep fate signals of neighbouring lineages at early grid points, and needs more moves.
 
+A grid built once can also read cells that were not used to build it: `scRL.place_cells(reference, embedding, query)` puts new cells in the reference embedding, and `scRL.project_cells(gres, positions, key='fate')` gives them the grid's lineage shares (or any per-grid-point value) by the kernel the grid uses for its own cells, with a flag for cells that lie outside the grid.
+
 ## Comparing conditions
 
 Two conditions are compared on one grid built from all cells. `scRL.project_conditions` counts each condition's cells at every grid point, `scRL.compare_abundance` tests where their numbers differ and reports, per cluster, how many grid points held by one condition only are expected from sampling alone, `scRL.compare_values(gres, test, reference, ends=[...])` labels each condition's map from its own cells, solves the lineage reward exactly on both maps and compares the values against a label-shuffling null, and `scRL.plot_conditions` draws the result.

@@ -11,6 +11,8 @@ GridCore
     scRL.GridCore.project_back
     scRL.GridCore.project
     scRL.GridNDCore.grids_nd
+    scRL.GridNDCore.place_cells
+    scRL.GridNDCore.project_cells
     scRL.PlotCore.plot_grids
     scRL.PlotCore.plot_views
     scRL.PlotCore.plot_slices

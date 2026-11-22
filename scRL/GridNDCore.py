@@ -399,3 +399,142 @@ def get_state_nd(gres, X, KNN=10):
     k = min(KNN, len(gres.embedding['embedding']))
     _, nn = cKDTree(gres.embedding['embedding']).query(points, k=k)
     return np.asarray(X)[nn.reshape(len(points), k)]
+
+
+def place_cells(reference, embedding, query, neighbors=10):
+    """
+    Positions of new cells in a reference embedding: the mean embedding of each new cell's nearest reference cells.
+
+    The nearest reference cells are sought in ``reference``, the representation in which cells are compared (for
+    example principal components), and their coordinates in ``embedding`` are averaged. The positions can be
+    given to ``project_cells`` to read a grid built from the reference cells for cells that were not used to
+    build it.
+
+    Parameters
+    ----------
+    reference
+        Representation of the reference cells, cells x features.
+    embedding
+        Coordinates of the reference cells that the grid was built from, cells x 2 to 5 dimensions.
+    query
+        Representation of the new cells, cells x features, in the same feature space as ``reference``.
+    neighbors
+        Number of nearest reference cells averaged for each new cell; at most the number of reference cells.
+        (Default: 10)
+
+    Returns
+    ----------
+    Positions of the new cells, cells x embedding dimensions (float array).
+    """
+    reference, embedding, query = (np.asarray(a, dtype=float) for a in (reference, embedding, query))
+    if reference.ndim != 2 or embedding.ndim != 2 or query.ndim != 2:
+        raise ValueError('reference, embedding and query must be two-dimensional (cells x features).')
+    if len(reference) != len(embedding):
+        raise ValueError(f'reference has {len(reference)} rows but embedding has {len(embedding)}; they must '
+                         f'describe the same cells.')
+    if reference.shape[1] != query.shape[1]:
+        raise ValueError(f'reference has {reference.shape[1]} features but query has {query.shape[1]}.')
+    if not (np.isfinite(reference).all() and np.isfinite(embedding).all() and np.isfinite(query).all()):
+        raise ValueError('reference, embedding and query must be finite (no NaN or infinite values).')
+    if neighbors < 1:
+        raise ValueError('neighbors must be at least 1.')
+    k = min(int(neighbors), len(reference))
+    _, nn = cKDTree(reference).query(query, k=k)
+    return embedding[nn.reshape(len(query), k)].mean(1)
+
+
+def _grid_step(gres):
+    """Spacing of the grid along each axis."""
+    if 'spacing' in gres.grids:
+        return np.asarray(gres.grids['spacing'], dtype=float)
+    return np.ptp(gres.grids['grids'], axis=0) / (gres.grids['n'] - 1)
+
+
+def project_cells(gres, positions, key='fate', neighbors=15, max_distance=1.0):
+    """
+    Values of a grid for cells that were not used to build it.
+
+    Each cell takes the Gaussian-kernel mean of the values of its ``neighbors`` nearest kept grid points, the
+    kernel ``project_back`` uses for the cells of the grid. For a table of lineage shares (the default
+    ``'fate'`` of ``fate_probabilities``) the means are then treated as the package treats its own cells: clipped
+    to [0, 1], rows that sum to more than 1 rescaled, and each row divided by its sum (the share of arriving
+    walks), so that the rows of the result are shares of the listed lineages. A cell whose row sums to 0 gets
+    NaN. Positions in the embedding of the cells the grid was built from
+    are given by ``place_cells``.
+
+    A cell that lies outside the grid still receives values, from the nearest kept grid points at its edge. Such
+    values are an extrapolation: check the cells flagged in ``outside`` or drop them.
+
+    Parameters
+    ----------
+    gres
+        Grids results holding ``key``.
+    positions
+        Positions of the cells in the embedding the grid was built from, cells x grid dimensions.
+    key
+        A key of the grid holding either a table (DataFrame, kept grid points x lineages, as written by
+        ``fate_probabilities``) or one value per kept grid point (as ``project_back`` accepts, for example
+        ``'pseudotime'``).
+        (Default: 'fate')
+    neighbors
+        Number of nearest kept grid points in the kernel.
+        (Default: 15)
+    max_distance
+        A cell is outside the grid when no kept grid point lies within this many grid steps of its position.
+        (Default: 1.0)
+
+    Returns
+    ----------
+    ``(values, outside)``. ``values`` is a DataFrame (cells x lineages, the columns of the table) for a table
+    and a 1-D array for one value per grid point, as the kernel gives it, without the rescaling
+    ``project_back`` applies to the values of its own cells. ``outside`` is a boolean array over the cells.
+    """
+    mapped = np.asarray(gres.grids['mapped_grids'])
+    points = gres.grids['grids'][mapped]
+    positions = np.asarray(positions, dtype=float)
+    if positions.ndim != 2 or positions.shape[1] != points.shape[1]:
+        raise ValueError(f'positions needs {points.shape[1]} columns (the grid dimensions), got shape '
+                         f'{positions.shape}.')
+    if not np.isfinite(positions).all():
+        raise ValueError('positions must be finite (no NaN or infinite values).')
+    if neighbors < 1:
+        raise ValueError('neighbors must be at least 1.')
+    if not max_distance > 0:
+        raise ValueError('max_distance must be greater than 0.')
+    if key not in gres.grids:
+        raise ValueError(f'{key!r} is not stored on the grid; available keys: {sorted(map(str, gres.grids))}')
+    stored = gres.grids[key]
+    if isinstance(stored, pd.DataFrame):
+        if len(stored) != len(mapped):
+            raise ValueError(f'gres.grids[{key!r}] has {len(stored)} rows but the grid has {len(mapped)} points.')
+        if set(stored.index) == set(mapped):
+            stored = stored.loc[mapped]
+        table, columns = stored.to_numpy(dtype=float), list(stored.columns)
+    else:
+        if isinstance(stored, pd.Series) and len(stored) == len(mapped) and set(stored.index) == set(mapped):
+            stored = stored.loc[mapped]
+        table, columns = np.asarray(stored, dtype=float), None
+        if table.ndim != 1 or len(table) != len(mapped):
+            raise ValueError(f'gres.grids[{key!r}] must hold one value per kept grid point ({len(mapped)}) or a '
+                             f'table of them.')
+    k = min(int(neighbors), len(points))
+    dist, nn = cKDTree(points).query(positions, k=k)
+    dist, nn = dist.reshape(len(positions), k), nn.reshape(len(positions), k)
+    sigma = dist.std(1, keepdims=True)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        weight = np.exp(-dist ** 2 / (2 * sigma ** 2))
+        total = weight.sum(1, keepdims=True)
+        weight = weight / total
+    weight = np.where((sigma == 0) | ~(total > 0), 1 / k, weight)
+    step = _grid_step(gres)
+    nearest = cKDTree(points / step).query(positions / step, k=1)[0]
+    outside = nearest > max_distance + 1e-9
+    if columns is None:
+        return (weight * table[nn]).sum(1), outside
+    S = np.einsum('qk,qkf->qf', weight, table[nn])
+    S = np.clip(S, 0, 1)
+    over = S.sum(1, keepdims=True)
+    S = np.where(over > 1, S / np.where(over > 1, over, 1), S)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        S = S / S.sum(1, keepdims=True)
+    return pd.DataFrame(S, columns=columns), outside
