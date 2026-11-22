@@ -1042,3 +1042,77 @@ def _paired(a, b):
     """Two-sided paired t-test of a - b across blocks, per column."""
     with np.errstate(invalid='ignore', divide='ignore'):
         return stats.ttest_rel(a, b, axis=0).pvalue
+
+
+def design_effect(values, samples, alpha=0.05, scale='rank'):
+    """
+    How far a test that takes cells as units over-calls, given how cells cluster within samples.
+
+    Cells from one animal (donor, library) resemble each other more than they resemble cells from another, so a
+    test that counts every cell as independent rejects too often when groups of animals are compared. The
+    intraclass correlation measures that resemblance (one-way analysis of variance, unequal sample sizes); the
+    design effect ``1 + (m - 1) * ICC`` is the factor by which the variance of a mean over m cells per sample is
+    inflated, and the predicted false-call rate is how often a two-sided cell-level test at level ``alpha``
+    would reject when the conditions do not differ. The sample-level tests of this module
+    (``compare_fates(..., samples=...)``) are the remedy: they take the sample as the unit.
+
+    Parameters
+    ----------
+    values
+        One number per cell (for example a fate probability or a pseudotime); array-like or pandas Series.
+        Cells with a missing value are dropped together with their sample label.
+    samples
+        One label per cell naming its replicate (animal, donor, library).
+    alpha
+        Level of the cell-level test whose false-call rate is predicted; between 0 and 1, exclusive.
+        (Default: 0.05)
+    scale
+        'rank': replace the values by their average ranks over all kept cells before anything else; 'raw':
+        use the values as they are. Ranks make the result independent of any monotone transform of the values.
+        (Default: 'rank')
+
+    Returns
+    -------
+    A plain ``dict`` (not a table, unlike the comparison functions of this module) with ``n_cells`` and
+    ``n_samples`` kept, ``cells_per_sample`` (m, the mean number of kept cells per sample), ``icc`` (as
+    estimated, possibly negative), ``design_effect`` (1 when the estimate is not positive),
+    ``predicted_false_call_rate``, ``effective_cells_per_sample`` (m divided by the design effect), ``alpha``,
+    ``scale`` and ``n_dropped`` (cells left out for a missing value).
+    """
+    if scale not in ('rank', 'raw'):
+        raise ValueError(f"scale must be 'rank' or 'raw', not {scale!r}.")
+    if not 0 < alpha < 1:
+        raise ValueError(f'alpha must lie between 0 and 1 (exclusive), not {alpha!r}.')
+    x = np.asarray(values, dtype=float).ravel()
+    labels = np.asarray(samples, dtype=object).ravel()
+    if len(x) != len(labels):
+        raise ValueError(f'values has {len(x)} entries but samples has {len(labels)} labels; one label per cell is needed.')
+    keep = ~np.isnan(x)
+    n_dropped = int((~keep).sum())
+    x, labels = x[keep], labels[keep]
+    N = len(x)
+    if N < 2:
+        raise ValueError(f'design_effect needs at least two cells with a value; {N} left after dropping missing values.')
+    names, codes = np.unique(labels.astype(str), return_inverse=True)
+    k = len(names)
+    if k < 2:
+        raise ValueError('design_effect needs cells from at least two samples.')
+    if N - k == 0:
+        raise ValueError('design_effect needs more than one cell in at least one sample; every sample has one cell.')
+    if scale == 'rank':
+        x = stats.rankdata(x, method='average')
+    sizes = np.bincount(codes).astype(float)
+    means = np.bincount(codes, weights=x) / sizes
+    msb = float((sizes * (means - x.mean()) ** 2).sum() / (k - 1))
+    msw = float(((x - means[codes]) ** 2).sum() / (N - k))
+    n0 = (N - (sizes ** 2).sum() / N) / (k - 1)
+    denom = msb + (n0 - 1) * msw
+    icc = float((msb - msw) / denom) if denom > 0 else 0.0
+    m = N / k
+    deff = 1 + (m - 1) * max(icc, 0.0)
+    z = stats.norm.ppf(1 - alpha / 2)
+    return {'n_cells': int(N), 'n_samples': int(k), 'cells_per_sample': float(m), 'icc': icc,
+            'design_effect': float(deff),
+            'predicted_false_call_rate': float(2 * (1 - stats.norm.cdf(z / np.sqrt(deff)))),
+            'effective_cells_per_sample': float(m / deff), 'alpha': float(alpha), 'scale': scale,
+            'n_dropped': n_dropped}

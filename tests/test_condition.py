@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import pytest
+from scipy import stats
 
 import scRL
 from scRL.ConditionCore import _grid_for_cells, condition_grid
@@ -770,3 +771,105 @@ def test_halving_a_cluster_is_found_on_the_log_scale_with_pairs():
     assert t.loc['X', 'pvalue_paired'] < .001
     assert t.loc['X', 'log2fc_samples'] == pytest.approx(-0.978, abs=.001)
     assert t.loc['X', 'log2fc_samples'] == pytest.approx((log[0] - log[1]).mean(), abs=1e-12)
+
+
+def _clustered(n_samples, n_cells, between_sd, seed):
+    rng = np.random.default_rng(seed)
+    means = rng.normal(0, between_sd, n_samples)
+    values = (means[:, None] + rng.normal(0, 1, (n_samples, n_cells))).ravel()
+    return values, np.repeat([f's{i}' for i in range(n_samples)], n_cells)
+
+
+def test_design_effect_independent_values():
+    values, samples = _clustered(10, 200, 0.0, 0)
+    out = scRL.design_effect(values, samples)
+    assert abs(out['icc']) < .02
+    assert .05 <= out['predicted_false_call_rate'] < .15
+
+
+def test_design_effect_strong_clustering():
+    values, samples = _clustered(10, 200, 1.0, 4)
+    out = scRL.design_effect(values, samples)
+    assert abs(out['icc'] - .5) < .15
+    assert out['predicted_false_call_rate'] > .8
+
+
+def test_design_effect_exact_arithmetic():
+    out = scRL.design_effect([1, 2, 3, 4, 5, 6], list('aaabbb'), scale='raw')
+    icc = 12.5 / 15.5
+    deff = 1 + 2 * icc
+    z = stats.norm.ppf(.975)
+    assert out['n_cells'] == 6 and out['n_samples'] == 2 and out['n_dropped'] == 0
+    assert out['cells_per_sample'] == pytest.approx(3)
+    assert out['icc'] == pytest.approx(icc)
+    assert out['design_effect'] == pytest.approx(deff)
+    assert out['predicted_false_call_rate'] == pytest.approx(2 * (1 - stats.norm.cdf(z / np.sqrt(deff))))
+    assert out['effective_cells_per_sample'] == pytest.approx(3 / deff)
+    assert out['alpha'] == .05 and out['scale'] == 'raw'
+    assert all(type(out[k]) in (int, float, str) for k in out)
+
+
+def test_design_effect_rank_scale_ignores_monotone_transforms():
+    values, samples = _clustered(6, 50, .7, 2)
+    a = scRL.design_effect(values, samples)
+    b = scRL.design_effect(np.exp(3 * values), samples)
+    assert a['icc'] == pytest.approx(b['icc'], abs=1e-12)
+    raw_a = scRL.design_effect(values, samples, scale='raw')
+    raw_b = scRL.design_effect(np.exp(3 * values), samples, scale='raw')
+    assert abs(raw_a['icc'] - raw_b['icc']) > .01
+
+
+def test_design_effect_negative_icc_gives_no_inflation():
+    values = [0, 10, 0, 10, 0, 10, 0, 10.5]
+    out = scRL.design_effect(values, list('aaaabbbb'), scale='raw', alpha=.1)
+    assert out['icc'] < 0
+    assert out['design_effect'] == 1.0
+    assert out['predicted_false_call_rate'] == pytest.approx(.1, abs=1e-9)
+    assert out['effective_cells_per_sample'] == pytest.approx(out['cells_per_sample'])
+
+
+def test_design_effect_drops_missing_values():
+    values, samples = _clustered(4, 30, .5, 3)
+    dirty = pd.Series(values.copy())
+    dirty[[0, 5, 40]] = np.nan
+    keep = ~dirty.isna().to_numpy()
+    out = scRL.design_effect(dirty, pd.Series(samples))
+    clean = scRL.design_effect(values[keep], samples[keep])
+    assert out['n_dropped'] == 3 and clean['n_dropped'] == 0
+    assert out['n_cells'] == 117
+    for k in ('icc', 'design_effect', 'predicted_false_call_rate', 'cells_per_sample'):
+        assert out[k] == pytest.approx(clean[k])
+
+
+def test_design_effect_errors():
+    ok = [1., 2, 3, 4]
+    with pytest.raises(ValueError, match='two samples'):
+        scRL.design_effect(ok, list('aaaa'))
+    with pytest.raises(ValueError, match='two cells'):
+        scRL.design_effect([1., np.nan], list('ab'))
+    with pytest.raises(ValueError, match='more than one cell'):
+        scRL.design_effect(ok, list('abcd'))
+    with pytest.raises(ValueError, match='labels'):
+        scRL.design_effect(ok, list('aab'))
+    for alpha in (0, 1, -.1, 1.5):
+        with pytest.raises(ValueError, match='alpha'):
+            scRL.design_effect(ok, list('aabb'), alpha=alpha)
+    with pytest.raises(ValueError, match='scale'):
+        scRL.design_effect(ok, list('aabb'), scale='log')
+
+
+def test_design_effect_predicts_the_false_call_rate_of_a_cell_level_test():
+    rng = np.random.default_rng(7)
+    k, n = 16, 150
+    values = (rng.normal(0, np.sqrt(.05 / .95), k)[:, None] + rng.normal(0, 1, (k, n)))
+    predicted = scRL.design_effect(values.ravel(), np.repeat(np.arange(k), n))['predicted_false_call_rate']
+    calls = 0
+    for _ in range(400):
+        order = rng.permutation(k)
+        a, b = values[order[:8]].ravel(), values[order[8:]].ravel()
+        calls += stats.mannwhitneyu(a, b, alternative='two-sided').pvalue < .05
+    assert abs(calls / 400 - predicted) < .12
+
+
+def test_design_effect_is_exported():
+    assert callable(scRL.design_effect) and 'design_effect' in scRL.__all__

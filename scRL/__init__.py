@@ -11,7 +11,7 @@ from .FateCore import fate_gate, fate_probabilities, fate_over_runs
 from .EnvironmentNDCore import reachability
 from .CorridorCore import fate_corridors, corridor_profile, plot_corridors
 from .ConditionCore import (project_conditions, compare_abundance, condition_grid, compare_values,
-                            compare_fates, shares_by_sample)
+                            compare_fates, shares_by_sample, design_effect)
 from .PlotCore import (plot_grids, plot_slices, plot_views, plot_trend, plot_clusters, plot_policy,
                        plot_training, plot_projections, plot_report, save_rotation, plot_style, plot_fates,
                        plot_conditions, plot_mesh, plot_trajectories, plot_voxels)
@@ -29,7 +29,7 @@ __all__ = ['grids_from_embedding', 'align_pseudotime', 'project_cluster', 'proje
            , 'plot_clusters', 'plot_policy', 'plot_training'
            , 'plot_projections', 'plot_report', 'save_rotation', 'plot_style'
            , 'exact_values', 'exact_trajectories', 'fate_gate', 'fate_probabilities', 'fate_over_runs', 'reachability'
-           , 'project_conditions', 'compare_abundance', 'condition_grid', 'compare_values', 'compare_fates', 'shares_by_sample'
+           , 'project_conditions', 'compare_abundance', 'condition_grid', 'compare_values', 'compare_fates', 'shares_by_sample', 'design_effect'
            , 'plot_fates', 'plot_conditions', 'plot_mesh', 'plot_trajectories', 'plot_voxels'
            , 'fate_corridors', 'corridor_profile', 'plot_corridors'
            # Backward compatibility

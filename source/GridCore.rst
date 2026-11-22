@@ -41,3 +41,4 @@ GridCore
     scRL.ConditionCore.compare_values
     scRL.ConditionCore.compare_fates
     scRL.ConditionCore.shares_by_sample
+    scRL.ConditionCore.design_effect
