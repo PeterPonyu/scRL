@@ -1322,7 +1322,8 @@ def compare_readout(values, samples, groups, test='auto', alpha=0.05, n_relabel=
     - ``'cells'``: the Mann-Whitney test over cells (asymptotic, tie-corrected and continuity-corrected). It is
       provided only so that the result of treating cells as units can be seen; it warns every time and names the
       false-positive rate that ``design_effect`` predicts for it (computed on the ranks of all kept cells).
-    - ``'auto'``: the same as ``'pooled'``.
+    - ``'auto'``: the pooled t-test, or the Welch t-test when the numbers of cells per sample differ at least
+      threefold between the conditions (the first of ``suitable_tests``).
 
     Guidance on the number of samples (all conditions together). It comes from planted shifts on a limited number
     of designs and is not a statement about every design. With three samples per condition, the false-positive
@@ -1332,10 +1333,11 @@ def compare_readout(values, samples, groups, test='auto', alpha=0.05, n_relabel=
     nine or more: the relabelling test as well. When the numbers of cells per sample differ several-fold between
     the conditions: the Welch t-test, the mixed model, or, from nine samples, the relabelling test; the pooled
     t-test rejected too often with a tenfold difference, most when the condition with fewer cells per sample
-    also had fewer samples, and it warns when the ratio is at least 3 (see ``cells_per_sample_ratio`` below)
-    without being replaced. Such a difference was not examined with fewer than seven samples. The pooled t-test is the default because it kept
-    close to its nominal level in the settings examined with similar numbers of cells per sample, which are
-    those designs and no others. No claim is made that any test is best in general.
+    also had fewer samples, so ``'auto'`` runs the Welch t-test when the ratio is at least 3 (see
+    ``cells_per_sample_ratio`` below) and ``'pooled'``, asked for by name, warns there. Such a difference was
+    not examined with fewer than seven samples. The pooled t-test is the default otherwise because it kept close
+    to its nominal level in the settings examined with similar numbers of cells per sample, which are those
+    designs and no others. No claim is made that any test is best in general.
 
     One value per sample (per-sample summaries, one row per animal) is accepted by ``'pooled'``, ``'welch'`` and
     ``'relabel'``; ``'mixed'`` and ``'cells'`` need more than one cell per sample.
@@ -1397,7 +1399,7 @@ def compare_readout(values, samples, groups, test='auto', alpha=0.05, n_relabel=
     ranks = stats.rankdata(x, method='average')
     per_sample = (n_cells[0] / n_samples[0], n_cells[1] / n_samples[1])
     ratio = float(max(per_sample) / min(per_sample))
-    run = 'pooled' if test == 'auto' else test
+    run = _suitable_tests(k, ratio)[0] if test == 'auto' else test
     if run == 'pooled' and ratio >= 3:
         warnings.warn(f'Cells per sample differ about {ratio:.0f}-fold between the conditions (means '
                       f'{per_sample[0]:.3g} and {per_sample[1]:.3g}). The pooled t-test on sample means rejected '

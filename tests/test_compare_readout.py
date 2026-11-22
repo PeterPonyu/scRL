@@ -359,11 +359,11 @@ def _uneven(k, cells_a, cells_b, seed=0):
 def test_cells_per_sample_ratio_is_the_larger_mean_over_the_smaller():
     values, samples, groups = _design(list(range(8)), cells=[10, 10, 12, 8, 2, 4, 2, 4], sd=1)
     with pytest.warns(UserWarning):
-        out = scRL.compare_readout(values, samples, groups)
+        out = scRL.compare_readout(values, samples, groups, test='pooled')
     assert out['n_cells'] == (40, 12)
     assert out['cells_per_sample_ratio'] == pytest.approx(10 / 3)
     with pytest.warns(UserWarning):
-        swapped = scRL.compare_readout(values, samples, np.where(groups == 'a', 'b', 'a'))
+        swapped = scRL.compare_readout(values, samples, np.where(groups == 'a', 'b', 'a'), test='pooled')
     assert swapped['cells_per_sample_ratio'] == pytest.approx(10 / 3)
     assert type(out['cells_per_sample_ratio']) is float
     even = scRL.compare_readout(*_design(list(range(6)), cells=3, sd=1))
@@ -372,7 +372,20 @@ def test_cells_per_sample_ratio_is_the_larger_mean_over_the_smaller():
     assert one_each['cells_per_sample_ratio'] == 1.0
 
 
-@pytest.mark.parametrize('test', ['auto', 'pooled'])
+def test_auto_runs_welch_without_a_warning_when_cells_per_sample_differ_threefold():
+    for cells_b, ratio in ((5, 10), (2, 3)):
+        values, samples, groups = _uneven(8, cells_b * ratio, cells_b)
+        with warnings.catch_warnings():
+            warnings.simplefilter('error')
+            out = scRL.compare_readout(values, samples, groups)
+        assert out['test'] == 'welch' and out['suitable_tests'][0] == 'welch'
+        means = pd.Series(values).groupby(samples).mean().to_numpy()
+        assert out['p_value'] == pytest.approx(stats.ttest_ind(means[:4], means[4:], equal_var=False).pvalue)
+    values, samples, groups = _uneven(8, 29, 10)          # below threefold: the pooled t-test
+    assert scRL.compare_readout(values, samples, groups)['test'] == 'pooled'
+
+
+@pytest.mark.parametrize('test', ['pooled'])
 def test_pooled_warns_when_cells_per_sample_differ_between_conditions_and_still_runs(test):
     values, samples, groups = _uneven(8, 50, 5)
     with pytest.warns(UserWarning, match='differ about 10-fold') as rec:
@@ -408,9 +421,10 @@ def test_suitable_tests_name_welch_in_place_of_pooled_when_cells_per_sample_diff
     for k, expect in [(6, ['welch']), (8, ['welch', 'mixed']), (10, ['welch', 'relabel', 'mixed'])]:
         for cells_a, cells_b in ((6, 2), (2, 6), (40, 4)):
             with pytest.warns(UserWarning, match='differ about'):
-                out = scRL.compare_readout(*_uneven(k, cells_a, cells_b, seed=k))
+                out = scRL.compare_readout(*_uneven(k, cells_a, cells_b, seed=k), test='pooled')
             assert out['test'] == 'pooled'
             assert out['suitable_tests'] == expect
+            assert scRL.compare_readout(*_uneven(k, cells_a, cells_b, seed=k))['test'] == 'welch'
             assert scRL.compare_readout(*_uneven(k, cells_a, cells_b, seed=k), test='welch')['suitable_tests'] == expect
         below = scRL.compare_readout(*_uneven(k, 29, 10, seed=k))
         assert below['suitable_tests'] == ['pooled'] + expect[1:]
