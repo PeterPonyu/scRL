@@ -1052,17 +1052,22 @@ def design_effect(values, samples, alpha=0.05, scale='rank'):
     test that counts every cell as independent rejects too often when groups of animals are compared. The
     intraclass correlation measures that resemblance (one-way analysis of variance, unequal sample sizes); the
     design effect ``1 + (m - 1) * ICC`` is the factor by which the variance of a mean over m cells per sample is
-    inflated, and the predicted false-call rate is how often a two-sided cell-level test at level ``alpha``
-    would reject when the conditions do not differ. The sample-level tests of this module
-    (``compare_fates(..., samples=...)``) are the remedy: they take the sample as the unit.
+    inflated, and the predicted false-call rate is the share of rejections expected from a two-sided cell-level
+    test at level ``alpha`` when the conditions do not differ, if the variance of its statistic is inflated by
+    the design effect and whole samples are assigned to the conditions at random. It is an estimate under that
+    approximation, not a guarantee: it is less reliable with few samples or very unequal sample sizes. The
+    sample-level tests of this module (``compare_fates(..., samples=...)``) are the remedy: they take the
+    sample as the unit.
 
     Parameters
     ----------
     values
         One number per cell (for example a fate probability or a pseudotime); array-like or pandas Series.
-        Cells with a missing value are dropped together with their sample label.
+        Cells with a missing value are dropped together with their sample label. With ``scale='raw'`` the
+        remaining values must be finite.
     samples
-        One label per cell naming its replicate (animal, donor, library).
+        One label per cell naming its replicate (animal, donor, library). Cells with a missing label are
+        dropped.
     alpha
         Level of the cell-level test whose false-call rate is predicted; between 0 and 1, exclusive.
         (Default: 0.05)
@@ -1072,12 +1077,12 @@ def design_effect(values, samples, alpha=0.05, scale='rank'):
         (Default: 'rank')
 
     Returns
-    -------
+    ----------
     A plain ``dict`` (not a table, unlike the comparison functions of this module) with ``n_cells`` and
     ``n_samples`` kept, ``cells_per_sample`` (m, the mean number of kept cells per sample), ``icc`` (as
     estimated, possibly negative), ``design_effect`` (1 when the estimate is not positive),
     ``predicted_false_call_rate``, ``effective_cells_per_sample`` (m divided by the design effect), ``alpha``,
-    ``scale`` and ``n_dropped`` (cells left out for a missing value).
+    ``scale`` and ``n_dropped`` (cells left out for a missing value or a missing sample label).
     """
     if scale not in ('rank', 'raw'):
         raise ValueError(f"scale must be 'rank' or 'raw', not {scale!r}.")
@@ -1087,9 +1092,11 @@ def design_effect(values, samples, alpha=0.05, scale='rank'):
     labels = np.asarray(samples, dtype=object).ravel()
     if len(x) != len(labels):
         raise ValueError(f'values has {len(x)} entries but samples has {len(labels)} labels; one label per cell is needed.')
-    keep = ~np.isnan(x)
+    keep = ~np.isnan(x) & ~np.asarray(pd.isna(labels), dtype=bool)
     n_dropped = int((~keep).sum())
     x, labels = x[keep], labels[keep]
+    if scale == 'raw' and not np.isfinite(x).all():
+        raise ValueError("values must be finite or missing when scale='raw'; use scale='rank' for unbounded values.")
     N = len(x)
     if N < 2:
         raise ValueError(f'design_effect needs at least two cells with a value; {N} left after dropping missing values.')

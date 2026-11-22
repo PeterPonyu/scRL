@@ -873,3 +873,29 @@ def test_design_effect_predicts_the_false_call_rate_of_a_cell_level_test():
 
 def test_design_effect_is_exported():
     assert callable(scRL.design_effect) and 'design_effect' in scRL.__all__
+
+
+def test_design_effect_unequal_sample_sizes():
+    """With samples of 10 and 2 cells the correlation uses the size n0, not the mean size."""
+    out = scRL.design_effect(np.arange(1, 13), ['a'] * 10 + ['b'] * 2, scale='raw')
+    msb, msw = 60.0, 8.3
+    n0 = (12 - (100 + 4) / 12) / 1
+    assert out['cells_per_sample'] == pytest.approx(6.0)
+    assert out['icc'] == pytest.approx((msb - msw) / (msb + (n0 - 1) * msw))
+    assert out['icc'] == pytest.approx(0.6514069718605627)
+
+
+def test_design_effect_refuses_infinite_raw_values():
+    with pytest.raises(ValueError, match='finite'):
+        scRL.design_effect([1, 2, np.inf, 4, 5, 6, 7, 8], list('aaaabbbb'), scale='raw')
+    out = scRL.design_effect([1, 2, np.inf, 4, 5, 6, 7, 8], list('aaaabbbb'))
+    assert np.isfinite(out['icc'])
+
+
+def test_design_effect_drops_cells_without_a_sample():
+    values = [1., 2., 3., 4., 5., 6., 7., 8.]
+    samples = ['a', 'a', 'a', None, 'b', 'b', 'b', np.nan]
+    out = scRL.design_effect(values, samples, scale='raw')
+    ref = scRL.design_effect([1., 2., 3., 5., 6., 7.], list('aaabbb'), scale='raw')
+    assert out['n_samples'] == 2 and out['n_dropped'] == 2
+    assert out['icc'] == pytest.approx(ref['icc'])
