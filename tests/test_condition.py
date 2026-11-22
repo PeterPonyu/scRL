@@ -810,7 +810,7 @@ def test_design_effect_exact_arithmetic():
     assert out['predicted_false_call_rate'] == out['predicted_false_call_rate_normal']      # two samples
     assert out['effective_cells_per_sample'] == pytest.approx(3 / deff)
     assert out['alpha'] == .05 and out['scale'] == 'raw'
-    assert all(type(out[k]) in (int, float, str) for k in out)
+    assert all(type(out[k]) in (int, float, str, bool) for k in out)
 
 
 def test_design_effect_rank_scale_ignores_monotone_transforms():
@@ -957,3 +957,129 @@ def test_design_effect_ranks_infinite_values_and_says_how_to_drop_them():
     dropped = scRL.design_effect(np.where(np.isfinite(values), values, np.nan), samples)
     assert dropped['n_cells'] == 7 and dropped['n_dropped'] == 1
     assert 'infinite' in scRL.design_effect.__doc__
+
+
+def _two_conditions_by_hand():
+    """Condition x: samples a (1, 2, 3) and b (5, 7); condition y: samples c (10, 14) and d (20, 21, 22, 23)."""
+    values = [1, 2, 3, 5, 7, 10, 14, 20, 21, 22, 23]
+    samples = list('aaabbccdddd')
+    groups = list('xxxxxyyyyyy')
+    return values, samples, groups
+
+
+def test_design_effect_within_conditions_exact_arithmetic():
+    values, samples, groups = _two_conditions_by_hand()
+    out = scRL.design_effect(values, samples, groups=groups, scale='raw')
+    # condition x: mean 3.6; sample means 2 and 6; condition y: mean 110 / 6; sample means 12 and 21.5
+    ssb_x = 3 * (2 - 3.6) ** 2 + 2 * (6 - 3.6) ** 2                      # 19.2
+    ssb_y = 2 * (12 - 110 / 6) ** 2 + 4 * (21.5 - 110 / 6) ** 2          # 120.33...
+    ssw_x, ssw_y = 2 + 2, 8 + 5
+    msb = (ssb_x + ssb_y) / (4 - 2)                                      # samples - conditions
+    msw = (ssw_x + ssw_y) / (11 - 4)                                     # cells - samples
+    n0 = ((5 - (9 + 4) / 5) + (6 - (4 + 16) / 6)) / (4 - 2)
+    assert ssb_x == pytest.approx(19.2) and ssb_y == pytest.approx(361 / 3)
+    assert n0 == pytest.approx(38 / 15)
+    icc = (msb - msw) / (msb + (n0 - 1) * msw)
+    assert out['within_groups'] is True
+    assert out['icc'] == pytest.approx(icc)
+    assert out['icc'] == pytest.approx(0.9162834, abs=1e-6)
+    assert out['n_cells'] == 11 and out['n_samples'] == 4 and out['cells_per_sample'] == pytest.approx(2.75)
+    deff = 1 + (2.75 - 1) * icc
+    c = stats.norm.ppf(.975) / np.sqrt(deff)
+    assert out['design_effect'] == pytest.approx(deff)
+    assert out['predicted_false_call_rate'] == pytest.approx(2 * stats.t.sf(c * np.sqrt(2) / np.sqrt(3 - c ** 2), 2))
+    assert out['predicted_false_call_rate_normal'] == pytest.approx(2 * stats.norm.sf(c))
+    plain = scRL.design_effect(values, samples, scale='raw')
+    assert plain['within_groups'] is False
+    assert plain['icc'] > out['icc']
+
+
+def _within_condition_icc(x, samples, groups):
+    """The pooled within-condition estimate written out from its definition, on the values as given."""
+    ssb = ssw = coefficient = 0.0
+    n_samples = 0
+    for g in np.unique(groups):
+        in_g = groups == g
+        centre = x[in_g].mean()
+        names = np.unique(samples[in_g])
+        n_samples += len(names)
+        coefficient += in_g.sum()
+        for s in names:
+            cells = x[in_g & (samples == s)]
+            ssb += len(cells) * (cells.mean() - centre) ** 2
+            ssw += ((cells - cells.mean()) ** 2).sum()
+            coefficient -= len(cells) ** 2 / in_g.sum()
+    msb = ssb / (n_samples - len(np.unique(groups)))
+    msw = ssw / (len(x) - n_samples)
+    n0 = coefficient / (n_samples - len(np.unique(groups)))
+    return (msb - msw) / (msb + (n0 - 1) * msw)
+
+
+def test_design_effect_within_conditions_is_not_inflated_by_a_difference_between_them():
+    rng = np.random.default_rng(11)
+    sizes = np.array([40, 55, 30, 70, 45, 60, 35, 50])
+    samples = np.repeat([f's{i}' for i in range(8)], sizes)
+    groups = np.repeat(['young'] * 4 + ['old'] * 4, sizes)
+    values = np.repeat(rng.normal(0, .2, 8), sizes) + rng.normal(0, 1, sizes.sum()) + 3.0 * (groups == 'old')
+    out = scRL.design_effect(values, samples, groups=groups)
+    ranks = stats.rankdata(values)                                       # over all kept cells
+    assert out['icc'] == pytest.approx(_within_condition_icc(ranks, samples, groups), rel=1e-10)
+    raw = scRL.design_effect(values, samples, groups=groups, scale='raw')
+    assert raw['icc'] == pytest.approx(_within_condition_icc(values, samples, groups), rel=1e-10)
+    plain = scRL.design_effect(values, samples)
+    assert out['icc'] < .1 and plain['icc'] > .6
+    assert plain['icc'] > 5 * out['icc']
+    assert plain['predicted_false_call_rate'] > out['predicted_false_call_rate'] + .1
+    assert out['n_samples'] == plain['n_samples'] == 8
+    assert out['cells_per_sample'] == plain['cells_per_sample']
+
+
+def test_design_effect_with_one_condition_equals_the_call_without_groups():
+    values, samples = _clustered(6, 40, .5, 8)
+    samples = samples[:-7]                                               # unequal sample sizes
+    values = values[:-7]
+    plain = scRL.design_effect(values, samples)
+    one = scRL.design_effect(values, samples, groups=['only'] * len(values))
+    assert plain['within_groups'] is False and one['within_groups'] is True
+    assert set(one) == set(plain)
+    for key in plain:
+        if key != 'within_groups':
+            assert one[key] == pytest.approx(plain[key], rel=1e-12), key
+
+
+def test_design_effect_refuses_a_sample_lying_in_two_conditions():
+    values, samples, groups = _two_conditions_by_hand()
+    groups[4] = 'y'                                                      # one cell of sample b
+    with pytest.raises(ValueError, match=r"one condition.*\['b'\]"):
+        scRL.design_effect(values, samples, groups=groups)
+    with pytest.raises(ValueError, match='groups'):
+        scRL.design_effect(values, samples, groups=groups[:-1])
+
+
+def test_design_effect_condition_with_a_single_sample():
+    """A condition with one sample adds to the within-sample part only; with no other kind nothing is left."""
+    values = [1, 2, 3, 5, 7, 10, 14, 20, 21, 22, 23, 40, 43]
+    samples = list('aaabbccddddee')
+    groups = list('xxxxxyyyyyyzz')
+    out = scRL.design_effect(values, samples, groups=groups, scale='raw')
+    msb = (19.2 + 361 / 3) / (5 - 3)
+    msw = (4 + 13 + 4.5) / (13 - 5)
+    n0 = ((5 - 13 / 5) + (6 - 20 / 6) + (2 - 4 / 2)) / (5 - 3)
+    assert out['n_samples'] == 5 and out['within_groups'] is True
+    assert out['icc'] == pytest.approx((msb - msw) / (msb + (n0 - 1) * msw))
+    with pytest.raises(ValueError, match='two or more samples'):
+        scRL.design_effect([1, 2, 3, 5, 7, 9], list('aaabbb'), groups=list('xxxyyy'))
+
+
+def test_design_effect_drops_cells_without_a_condition():
+    values, samples, groups = _two_conditions_by_hand()
+    ref = scRL.design_effect(values[1:], samples[1:], groups=groups[1:], scale='raw')
+    out = scRL.design_effect(values, samples, groups=[None] + groups[1:], scale='raw')
+    assert out['n_dropped'] == 1 and out['n_cells'] == 10
+    assert out['icc'] == pytest.approx(ref['icc'])
+
+
+def test_design_effect_docstring_says_when_the_within_condition_estimate_is_needed():
+    sentence = 'with ``groups`` the correlation is estimated within conditions, as it must be when the conditions may differ'
+    assert sentence in ' '.join(scRL.design_effect.__doc__.split())
+    assert sentence in ' '.join(scRL.compare_readout.__doc__.split())

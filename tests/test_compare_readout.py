@@ -573,9 +573,26 @@ def test_returned_design_effect_matches_function_on_kept_cells():
     v, s, g = _clustered(8, 20, .2, rng)
     v = v.copy(); v[:3] = np.nan
     out = scRL.compare_readout(v, s, g)
-    ref = scRL.design_effect(v[3:], s[3:])
+    ref = scRL.design_effect(v[3:], s[3:], groups=g[3:])
     assert out['design_effect'] == ref
     assert isinstance(out, dict) and isinstance(out['p_value'], float)
+
+
+def test_returned_design_effect_is_estimated_within_conditions():
+    rng = np.random.default_rng(9)
+    v, s, g = _clustered(8, 60, .05, rng, shift=3.0)
+    out = scRL.compare_readout(v, s, g)
+    within = scRL.design_effect(v, s, groups=g)
+    plain = scRL.design_effect(v, s)
+    assert out['design_effect']['within_groups'] is True
+    assert out['design_effect']['icc'] == within['icc']
+    assert out['design_effect']['icc'] < .5 * plain['icc']
+    with pytest.warns(UserWarning) as rec:
+        cells = scRL.compare_readout(v, s, g, test='cells')
+    assert cells['design_effect'] == within
+    message = next(str(r.message) for r in rec if 'independent unit' in str(r.message))
+    assert f"{within['predicted_false_call_rate']:.3g}" in message
+    assert f"{plain['predicted_false_call_rate']:.3g}" not in message
 
 
 def test_importable_from_top_level():

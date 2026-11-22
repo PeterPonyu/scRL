@@ -1054,7 +1054,7 @@ def _few_sample_rate(c, k):
     return float(2 * stats.t.sf(c * np.sqrt(k - 2) / np.sqrt(k - 1 - c * c), k - 2))
 
 
-def design_effect(values, samples, alpha=0.05, scale='rank'):
+def design_effect(values, samples, alpha=0.05, scale='rank', groups=None):
     """
     How far a test that takes cells as units over-calls, given how cells cluster within samples.
 
@@ -1083,6 +1083,19 @@ def design_effect(values, samples, alpha=0.05, scale='rank'):
     applies. Near a design effect of 1 neither form is accurate, because a negative estimate of the correlation
     is set to zero; there the few-sample form can fall below ``alpha`` (to 0 for four samples at ``alpha`` 0.05).
 
+    When the samples belong to conditions that may differ, a difference between the conditions adds to the
+    spread between the sample means and is counted as resemblance within samples. Without ``groups`` the
+    correlation is estimated over all samples; with ``groups`` the correlation is estimated within conditions,
+    as it must be when the conditions may differ. The sums of squares and their degrees of freedom are then
+    added over the conditions. With ``n_gi`` the number of kept cells of sample i of condition g, ``N_g`` their
+    sum over the samples of g, ``k`` samples, ``G`` conditions and ``N`` cells in all:
+    ``MSB = sum_g sum_i n_gi * (mean_gi - mean_g)**2 / (k - G)``, where ``mean_g`` is the mean over the cells of
+    condition g; ``MSW = sum_g sum_i sum_cells (x - mean_gi)**2 / (N - k)``;
+    ``n0 = sum_g (N_g - sum_i n_gi**2 / N_g) / (k - G)``; and
+    ``ICC = (MSB - MSW) / (MSB + (n0 - 1) * MSW)``. With one condition these are the expressions used without
+    ``groups``. The ranks, the design effect (m is the mean number of cells per sample over all samples) and
+    the predicted rates (k is the number of all samples) are taken as without ``groups``.
+
     Parameters
     ----------
     values
@@ -1101,6 +1114,11 @@ def design_effect(values, samples, alpha=0.05, scale='rank'):
         'rank': replace the values by their average ranks over all kept cells before anything else; 'raw':
         use the values as they are. Ranks make the result independent of any monotone transform of the values.
         (Default: 'rank')
+    groups
+        One label per cell naming its condition, or None. Every sample must lie in one condition; any number
+        of conditions is accepted. Cells with a missing label are dropped. A condition with a single sample
+        adds nothing to the spread between samples and is allowed as long as another condition has two or
+        more samples. (Default: None)
 
     Returns
     ----------
@@ -1109,8 +1127,9 @@ def design_effect(values, samples, alpha=0.05, scale='rank'):
     estimated, possibly negative), ``design_effect`` (1 when the estimate is not positive),
     ``predicted_false_call_rate`` (the few-sample form with three or more samples; with two samples it equals
     the normal form), ``predicted_false_call_rate_normal`` (the normal form),
-    ``effective_cells_per_sample`` (m divided by the design effect), ``alpha``, ``scale`` and ``n_dropped``
-    (cells left out for a missing value or a missing sample label).
+    ``effective_cells_per_sample`` (m divided by the design effect), ``alpha``, ``scale``, ``n_dropped``
+    (cells left out for a missing value, a missing sample label or, with ``groups``, a missing condition) and
+    ``within_groups`` (True when ``groups`` was given).
     """
     if scale not in ('rank', 'raw'):
         raise ValueError(f"scale must be 'rank' or 'raw', not {scale!r}.")
@@ -1121,6 +1140,12 @@ def design_effect(values, samples, alpha=0.05, scale='rank'):
     if len(x) != len(labels):
         raise ValueError(f'values has {len(x)} entries but samples has {len(labels)} labels; one label per cell is needed.')
     keep = ~np.isnan(x) & ~np.asarray(pd.isna(labels), dtype=bool)
+    if groups is not None:
+        conditions = np.asarray(groups, dtype=object).ravel()
+        if len(conditions) != len(x):
+            raise ValueError(f'values has {len(x)} entries but groups has {len(conditions)} labels; one label per '
+                             'cell is needed.')
+        keep &= ~np.asarray(pd.isna(conditions), dtype=bool)
     n_dropped = int((~keep).sum())
     x, labels = x[keep], labels[keep]
     if scale == 'raw' and not np.isfinite(x).all():
@@ -1136,11 +1161,27 @@ def design_effect(values, samples, alpha=0.05, scale='rank'):
         raise ValueError('design_effect needs more than one cell in at least one sample; every sample has one cell.')
     if scale == 'rank':
         x = stats.rankdata(x, method='average')
+    if groups is None:
+        cond = np.zeros(k, dtype=int)                # one condition holding every sample
+    else:
+        cell_cond = np.unique(conditions[keep].astype(str), return_inverse=True)[1]
+        cond = np.zeros(k, dtype=int)
+        cond[codes] = cell_cond
+        split = np.unique(codes[cond[codes] != cell_cond])
+        if len(split):
+            raise ValueError(f'every sample must lie in one condition; {names[split].tolist()} appear in more '
+                             'than one.')
+    df_between = k - (cond.max() + 1)                # samples minus conditions
+    if df_between == 0:
+        raise ValueError('design_effect with groups needs two or more samples in at least one condition; every '
+                         'condition has a single sample.')
     sizes = np.bincount(codes).astype(float)
     means = np.bincount(codes, weights=x) / sizes
-    msb = float((sizes * (means - x.mean()) ** 2).sum() / (k - 1))
+    cond_sizes = np.bincount(cond, weights=sizes)
+    cond_means = np.bincount(cond, weights=sizes * means) / cond_sizes
+    msb = float((sizes * (means - cond_means[cond]) ** 2).sum() / df_between)
     msw = float(((x - means[codes]) ** 2).sum() / (N - k))
-    n0 = (N - (sizes ** 2).sum() / N) / (k - 1)
+    n0 = (N - (np.bincount(cond, weights=sizes ** 2) / cond_sizes).sum()) / df_between
     denom = msb + (n0 - 1) * msw
     icc = float((msb - msw) / denom) if denom > 0 else 0.0
     m = N / k
@@ -1152,7 +1193,7 @@ def design_effect(values, samples, alpha=0.05, scale='rank'):
             'predicted_false_call_rate': _few_sample_rate(c, k) if k >= 3 else normal,
             'predicted_false_call_rate_normal': normal,
             'effective_cells_per_sample': float(m / deff), 'alpha': float(alpha), 'scale': scale,
-            'n_dropped': n_dropped}
+            'n_dropped': n_dropped, 'within_groups': groups is not None}
 
 
 def _readout_cells(values, samples, groups):
@@ -1321,7 +1362,9 @@ def compare_readout(values, samples, groups, test='auto', alpha=0.05, n_relabel=
       ``RuntimeWarning`` and ``fallback`` set to True.
     - ``'cells'``: the Mann-Whitney test over cells (asymptotic, tie-corrected and continuity-corrected). It is
       provided only so that the result of treating cells as units can be seen; it warns every time and names the
-      false-positive rate that ``design_effect`` predicts for it (computed on the ranks of all kept cells).
+      false-positive rate that ``design_effect`` predicts for it (computed on the ranks of all kept cells and
+      called with the conditions: with ``groups`` the correlation is estimated within conditions, as it must be
+      when the conditions may differ).
     - ``'auto'``: the pooled t-test, or the Welch t-test when the numbers of cells per sample differ at least
       threefold between the conditions (the first of ``suitable_tests``).
 
@@ -1378,8 +1421,8 @@ def compare_readout(values, samples, groups, test='auto', alpha=0.05, n_relabel=
     and is not a verdict on these data), ``smallest_p`` (the smallest p-value the relabelling test could return;
     None for the other tests), ``fallback`` (True only when the mixed model was replaced by the t-test on sample
     means, as described above; False otherwise, for every test) and ``design_effect`` (the dict returned by
-    ``design_effect`` for the kept cells, which states the within-sample correlation; None with one value per
-    sample). Infinite values must be set to NaN first.
+    ``design_effect`` for the kept cells and their conditions, which states the within-sample correlation
+    estimated within conditions; None with one value per sample). Infinite values must be set to NaN first.
     """
     tests = ('auto', 'pooled', 'welch', 'relabel', 'mixed', 'cells')
     if test not in tests:
@@ -1410,7 +1453,7 @@ def compare_readout(values, samples, groups, test='auto', alpha=0.05, n_relabel=
     if single and run in ('mixed', 'cells'):
         raise ValueError(f"test={run!r} needs more than one cell per sample; every sample has one value here. "
                          "Use 'pooled'.")
-    deff = None if single else design_effect(x, codes, alpha=alpha)
+    deff = None if single else design_effect(x, codes, alpha=alpha, groups=side[codes])
     df, smallest, fallback = None, None, False
     if run in ('pooled', 'welch'):
         res = _means_t_test(m1, m2, equal_var=run == 'pooled')
