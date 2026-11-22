@@ -1419,8 +1419,9 @@ def compare_readout(values, samples, groups, test='auto', alpha=0.05, n_relabel=
     often on every scale (0.064 to 0.066), so ``'pooled'``, asked for by name, also warns when the ratio is at
     least 3; the Welch t-test held there (0.051 on raw means and on mean ranks, 0.052 on normal scores), and the
     rule of the pooled t-test below a ratio of 3 and the Welch t-test from there held in every setting examined
-    (0.051 at most, on normal scores). With two samples against five no t-test held under either difference, and
-    the Welch t-test rejects too often there even for independent normal sample means (0.065). Such a difference
+    (0.051 at most, on normal scores). With two samples against five every t-test rejected more than 0.06 under either
+    difference (0.065 to 0.085, on few designs, so not clearly apart from 0.06), and the Welch t-test rejects too
+    often there even for independent normal sample means (0.065). Such a difference
     was not examined with fewer than seven samples. With three samples per condition the false-positive rate of
     the pooled t-test, averaged over many sets of six animals, was 0.049 on normal scores and 0.045 on raw means;
     a single design of that size cannot be checked, and the relabelling test cannot reject at 0.05 there (its
