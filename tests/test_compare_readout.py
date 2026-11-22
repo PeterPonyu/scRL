@@ -10,13 +10,16 @@ import scRL
 
 
 def _design(means, cells=4, sd=0.0, seed=0, groups=None, k1=None):
-    """Cells around given sample means; the first k1 samples are condition 'a', the rest 'b'."""
+    """Cells around given sample means; the first k1 samples are condition 'a', the rest 'b'.
+
+    cells is one number for every sample or one number per sample."""
     rng = np.random.default_rng(seed)
     k = len(means)
     k1 = k // 2 if k1 is None else k1
-    values = np.concatenate([m + sd * rng.standard_normal(cells) for m in means])
-    samples = np.repeat([f's{i}' for i in range(k)], cells)
-    grp = np.repeat(['a'] * k1 + ['b'] * (k - k1), cells)
+    sizes = np.broadcast_to(cells, k)
+    values = np.concatenate([m + sd * rng.standard_normal(c) for m, c in zip(means, sizes)])
+    samples = np.repeat([f's{i}' for i in range(k)], sizes)
+    grp = np.repeat(['a'] * k1 + ['b'] * (k - k1), sizes)
     return values, samples, grp
 
 
@@ -52,6 +55,20 @@ def test_t_tests_match_scipy_on_sample_means(test, equal_var):
         assert out['df'] == pytest.approx(ref.df)
     assert out['condition_1'] == 'x' and out['condition_2'] == 'y'
     assert out['n_samples'] == (3, 3) and out['n_cells'] == (6, 6)
+
+
+@pytest.mark.parametrize('test, equal_var', [('pooled', True), ('welch', False)])
+def test_t_tests_use_unweighted_sample_means_with_unequal_cells(test, equal_var):
+    values, samples, groups = _design([0, 1, 5, 2, 6, 4], cells=[2, 5, 9, 9, 2, 5], sd=1, seed=2)
+    means = pd.Series(values).groupby(samples).mean().to_numpy()
+    expected = means[:3].mean() - means[3:].mean()
+    assert abs(expected - (values[groups == 'a'].mean() - values[groups == 'b'].mean())) > 0.1
+    ref = stats.ttest_ind(means[:3], means[3:], equal_var=equal_var)
+    out = scRL.compare_readout(values, samples, groups, test=test)
+    assert out['n_cells'] == (16, 16)
+    assert out['estimate'] == pytest.approx(expected)
+    assert out['statistic'] == pytest.approx(ref.statistic)
+    assert out['p_value'] == pytest.approx(ref.pvalue)
 
 
 def test_relabel_complete_separation_six_samples():
@@ -92,6 +109,17 @@ def test_relabel_random_branch_agrees_with_exhaustive():
     assert again['p_value'] == rand['p_value']
 
 
+def test_relabel_random_branch_counts_the_observed_arrangement():
+    # complete separation, one relabelling fewer than the 70 distinct ones, so the random branch runs
+    values, samples, groups = _design(list(range(4)) + list(range(10, 14)), cells=3, sd=.1)
+    for seed in range(5):
+        out = scRL.compare_readout(values, samples, groups, test='relabel', n_relabel=69, seed=seed)
+        hits = out['p_value'] * 70
+        assert out['smallest_p'] == pytest.approx(1 / 70)
+        assert out['p_value'] >= 1 / 70
+        assert hits == pytest.approx(round(hits)) and round(hits) >= 1
+
+
 def test_mixed_detects_effect():
     rng = np.random.default_rng(11)
     values, samples, groups = _clustered(10, 100, .1, rng, shift=1.0)
@@ -99,6 +127,41 @@ def test_mixed_detects_effect():
     assert out['p_value'] < 0.01
     assert np.sign(out['statistic']) == np.sign(out['estimate']) == 1
     assert out['df'] == 8
+
+
+def test_mixed_p_value_is_the_t_reference_with_samples_minus_two():
+    rng = np.random.default_rng(21)
+    values, samples, groups = _clustered(8, 40, .2, rng, shift=.4)
+    out = scRL.compare_readout(values, samples, groups, test='mixed')
+    assert out['fallback'] is False
+    assert out['df'] == 6
+    assert out['p_value'] == pytest.approx(2 * stats.t.sf(abs(out['statistic']), 6))
+
+
+def test_mixed_falls_back_to_sample_means_when_no_sample_variance_is_found():
+    # Gaussian cells with no sample effect, four samples against four
+    sizes = (15, 40, 8, 125, 20, 47, 90, 61)
+    values = np.random.default_rng(3).standard_normal(sum(sizes))
+    samples = np.repeat(np.arange(8), sizes)
+    groups = np.repeat(list('aaaabbbb'), sizes)
+    with pytest.warns(RuntimeWarning, match='t-test on the sample means'):
+        out = scRL.compare_readout(values, samples, groups, test='mixed')
+    assert out['test'] == 'mixed' and out['fallback'] is True
+    scores = stats.norm.ppf((stats.rankdata(values) - .5) / len(values))
+    means = np.bincount(samples, weights=scores) / np.bincount(samples)
+    ref = stats.ttest_ind(means[:4], means[4:])
+    assert out['statistic'] == pytest.approx(ref.statistic)
+    assert out['p_value'] == pytest.approx(ref.pvalue)
+    assert out['df'] == 6
+
+
+def test_fallback_is_false_for_the_tests_that_ran_as_asked():
+    rng = np.random.default_rng(12)
+    v, s, g = _clustered(10, 30, .3, rng)
+    for t in ('auto', 'pooled', 'welch', 'relabel', 'mixed'):
+        assert scRL.compare_readout(v, s, g, test=t)['fallback'] is False
+    with pytest.warns(UserWarning):
+        assert scRL.compare_readout(v, s, g, test='cells')['fallback'] is False
 
 
 def test_mixed_null_rejection_rate():
@@ -211,6 +274,68 @@ def test_input_errors():
     for alpha in (0, 1, -.1, 2):
         with pytest.raises(ValueError):
             scRL.compare_readout(v, s, g, alpha=alpha)
+    for bad in (0, -3, 2.5, 200.0, True, None, '5'):
+        with pytest.raises(ValueError, match='n_relabel must be a positive integer'):
+            scRL.compare_readout(v, s, g, n_relabel=bad)
+        with pytest.raises(ValueError, match='max_cells must be a positive integer'):
+            scRL.compare_readout(v, s, g, max_cells=bad)
+    assert scRL.compare_readout(v, s, g, n_relabel=np.int64(5), max_cells=np.int32(2))['test'] == 'pooled'
+
+
+def test_infinite_values_are_refused():
+    v, s, g = _design(list(range(6)), cells=3, sd=1)
+    for bad in (np.inf, -np.inf):
+        w = v.copy()
+        w[4] = bad
+        with pytest.raises(ValueError, match='infinite'):
+            scRL.compare_readout(w, s, g)
+
+
+def test_equal_values_are_refused_by_every_test():
+    _, s, g = _design(list(range(8)), cells=5)
+    for t in ('auto', 'pooled', 'welch', 'relabel', 'mixed', 'cells'):
+        with warnings.catch_warnings():
+            warnings.simplefilter('error')
+            with pytest.raises(ValueError, match='all equal'):
+                scRL.compare_readout(np.ones(40), s, g, test=t)
+
+
+@pytest.mark.parametrize('test', ['pooled', 'welch'])
+def test_t_tests_refuse_sample_means_without_spread_in_either_condition(test):
+    values, samples, groups = _design([1, 1, 1, 2, 2, 2], cells=1)
+    with warnings.catch_warnings():
+        warnings.simplefilter('error')
+        with pytest.raises(ValueError, match='do not vary'):
+            scRL.compare_readout(values, samples, groups, test=test)
+
+
+def test_one_value_per_sample():
+    rng = np.random.default_rng(6)
+    values = rng.normal(size=8) + np.repeat([0.0, 1.0], 4)
+    samples = np.arange(8)
+    groups = np.repeat(['a', 'b'], 4)
+    for t, equal_var in (('pooled', True), ('welch', False)):
+        out = scRL.compare_readout(values, samples, groups, test=t)
+        ref = stats.ttest_ind(values[:4], values[4:], equal_var=equal_var)
+        assert out['statistic'] == pytest.approx(ref.statistic)
+        assert out['p_value'] == pytest.approx(ref.pvalue)
+        assert out['design_effect'] is None
+        assert out['n_cells'] == (4, 4)
+    out = scRL.compare_readout(values, samples, groups, test='relabel')
+    assert out['design_effect'] is None
+    assert 2 / 70 <= out['p_value'] <= 1
+    for t in ('cells', 'mixed'):
+        with pytest.raises(ValueError, match='more than one cell per sample'):
+            scRL.compare_readout(values, samples, groups, test=t)
+
+
+def test_a_sample_with_a_single_cell_is_kept():
+    values, samples, groups = _design(list(range(8)), cells=[1, 4, 4, 4, 4, 4, 4, 4], sd=.5)
+    for t in ('pooled', 'welch', 'relabel', 'mixed'):
+        out = scRL.compare_readout(values, samples, groups, test=t)
+        assert out['n_samples'] == (4, 4) and out['n_cells'] == (13, 16)
+        assert out['design_effect']['n_samples'] == 8
+        assert np.isfinite(out['p_value'])
 
 
 def test_categorical_groups_fix_the_order():
@@ -219,6 +344,16 @@ def test_categorical_groups_fix_the_order():
     cat = pd.Series(pd.Categorical(g, categories=['b', 'a']))
     out = scRL.compare_readout(v, s, cat)
     assert (default['condition_1'], default['condition_2']) == ('a', 'b')
+    assert (out['condition_1'], out['condition_2']) == ('b', 'a')
+    assert out['estimate'] == pytest.approx(-default['estimate'])
+    assert out['n_samples'] == (3, 3)
+
+
+@pytest.mark.parametrize('wrap', [lambda c: c, pd.Series, pd.CategoricalIndex])
+def test_category_order_is_honoured_and_unused_categories_are_ignored(wrap):
+    v, s, g = _design(list(range(6)), cells=3, sd=1)
+    default = scRL.compare_readout(v, s, g)
+    out = scRL.compare_readout(v, s, wrap(pd.Categorical(g, categories=['c', 'b', 'a', 'd'])))
     assert (out['condition_1'], out['condition_2']) == ('b', 'a')
     assert out['estimate'] == pytest.approx(-default['estimate'])
     assert out['n_samples'] == (3, 3)
