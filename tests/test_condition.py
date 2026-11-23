@@ -784,17 +784,17 @@ def test_design_effect_independent_values():
     values, samples = _clustered(10, 200, 0.0, 0)
     out = scRL.design_effect(values, samples)
     assert abs(out['icc']) < .02
-    assert .05 <= out['predicted_false_call_rate_normal'] < .15
+    assert .05 <= out['implied_false_positive_rate_normal'] < .15
     c = stats.norm.ppf(.975) / np.sqrt(out['design_effect'])
-    assert out['predicted_false_call_rate'] == pytest.approx(2 * stats.t.sf(c * np.sqrt(8) / np.sqrt(9 - c ** 2), 8))
-    assert .03 < out['predicted_false_call_rate'] < out['predicted_false_call_rate_normal']
+    assert out['implied_false_positive_rate'] == pytest.approx(2 * stats.t.sf(c * np.sqrt(8) / np.sqrt(9 - c ** 2), 8))
+    assert .03 < out['implied_false_positive_rate'] < out['implied_false_positive_rate_normal']
 
 
 def test_design_effect_strong_clustering():
     values, samples = _clustered(10, 200, 1.0, 4)
     out = scRL.design_effect(values, samples)
     assert abs(out['icc'] - .5) < .15
-    assert out['predicted_false_call_rate'] > .8
+    assert out['implied_false_positive_rate'] > .8
 
 
 def test_design_effect_exact_arithmetic():
@@ -806,8 +806,8 @@ def test_design_effect_exact_arithmetic():
     assert out['cells_per_sample'] == pytest.approx(3)
     assert out['icc'] == pytest.approx(icc)
     assert out['design_effect'] == pytest.approx(deff)
-    assert out['predicted_false_call_rate_normal'] == pytest.approx(2 * (1 - stats.norm.cdf(z / np.sqrt(deff))))
-    assert out['predicted_false_call_rate'] == out['predicted_false_call_rate_normal']      # two samples
+    assert out['implied_false_positive_rate_normal'] == pytest.approx(2 * (1 - stats.norm.cdf(z / np.sqrt(deff))))
+    assert out['implied_false_positive_rate'] == out['implied_false_positive_rate_normal']      # two samples
     assert out['effective_cells_per_sample'] == pytest.approx(3 / deff)
     assert out['alpha'] == .05 and out['scale'] == 'raw'
     assert all(type(out[k]) in (int, float, str, bool) for k in out)
@@ -828,7 +828,7 @@ def test_design_effect_negative_icc_gives_no_inflation():
     out = scRL.design_effect(values, list('aaaabbbb'), scale='raw', alpha=.1)
     assert out['icc'] < 0
     assert out['design_effect'] == 1.0
-    assert out['predicted_false_call_rate'] == pytest.approx(.1, abs=1e-9)
+    assert out['implied_false_positive_rate'] == pytest.approx(.1, abs=1e-9)
     assert out['effective_cells_per_sample'] == pytest.approx(out['cells_per_sample'])
 
 
@@ -841,7 +841,7 @@ def test_design_effect_drops_missing_values():
     clean = scRL.design_effect(values[keep], samples[keep])
     assert out['n_dropped'] == 3 and clean['n_dropped'] == 0
     assert out['n_cells'] == 117
-    for k in ('icc', 'design_effect', 'predicted_false_call_rate', 'predicted_false_call_rate_normal',
+    for k in ('icc', 'design_effect', 'implied_false_positive_rate', 'implied_false_positive_rate_normal',
               'cells_per_sample'):
         assert out[k] == pytest.approx(clean[k])
 
@@ -867,7 +867,7 @@ def test_design_effect_predicts_the_false_call_rate_of_a_cell_level_test():
     rng = np.random.default_rng(7)
     k, n = 16, 150
     values = (rng.normal(0, np.sqrt(.05 / .95), k)[:, None] + rng.normal(0, 1, (k, n)))
-    predicted = scRL.design_effect(values.ravel(), np.repeat(np.arange(k), n))['predicted_false_call_rate']
+    predicted = scRL.design_effect(values.ravel(), np.repeat(np.arange(k), n))['implied_false_positive_rate']
     calls = 0
     for _ in range(400):
         order = rng.permutation(k)
@@ -883,9 +883,9 @@ def test_design_effect_few_sample_rate_against_the_t_distribution_written_out():
     assert out['n_samples'] == k and deff == pytest.approx(13, abs=1)
     c = stats.norm.ppf(.975) / np.sqrt(deff)
     expected = 2 * stats.t.sf(c * np.sqrt(k - 2) / np.sqrt(k - 1 - c ** 2), k - 2)
-    assert out['predicted_false_call_rate'] == pytest.approx(expected)
-    assert out['predicted_false_call_rate_normal'] == pytest.approx(2 * stats.norm.sf(c))
-    assert .02 < out['predicted_false_call_rate'] - out['predicted_false_call_rate_normal'] < .06
+    assert out['implied_false_positive_rate'] == pytest.approx(expected)
+    assert out['implied_false_positive_rate_normal'] == pytest.approx(2 * stats.norm.sf(c))
+    assert .02 < out['implied_false_positive_rate'] - out['implied_false_positive_rate_normal'] < .06
 
 
 def test_few_sample_rate_formula():
@@ -906,15 +906,15 @@ def test_design_effect_few_sample_rate_is_zero_for_four_samples_without_clusteri
     values, samples = _clustered(4, 200, 0.0, 3)
     out = scRL.design_effect(values, samples)
     assert out['design_effect'] < 1.2
-    assert out['predicted_false_call_rate'] == 0.0
-    assert .05 <= out['predicted_false_call_rate_normal'] < .08
+    assert out['implied_false_positive_rate'] == 0.0
+    assert .05 <= out['implied_false_positive_rate_normal'] < .08
 
 
 def test_design_effect_few_sample_rate_tends_to_the_normal_form_with_many_samples():
     values, samples = _clustered(400, 20, .5, 5)
     out = scRL.design_effect(values, samples)
     assert out['n_samples'] == 400 and out['design_effect'] > 3
-    gap = out['predicted_false_call_rate'] - out['predicted_false_call_rate_normal']
+    gap = out['implied_false_positive_rate'] - out['implied_false_positive_rate_normal']
     assert 0 < gap < .005
 
 
@@ -987,8 +987,8 @@ def test_design_effect_within_conditions_exact_arithmetic():
     deff = 1 + (2.75 - 1) * icc
     c = stats.norm.ppf(.975) / np.sqrt(deff)
     assert out['design_effect'] == pytest.approx(deff)
-    assert out['predicted_false_call_rate'] == pytest.approx(2 * stats.t.sf(c * np.sqrt(2) / np.sqrt(3 - c ** 2), 2))
-    assert out['predicted_false_call_rate_normal'] == pytest.approx(2 * stats.norm.sf(c))
+    assert out['implied_false_positive_rate'] == pytest.approx(2 * stats.t.sf(c * np.sqrt(2) / np.sqrt(3 - c ** 2), 2))
+    assert out['implied_false_positive_rate_normal'] == pytest.approx(2 * stats.norm.sf(c))
     plain = scRL.design_effect(values, samples, scale='raw')
     assert plain['within_groups'] is False
     assert plain['icc'] > out['icc']
@@ -1029,7 +1029,7 @@ def test_design_effect_within_conditions_is_not_inflated_by_a_difference_between
     plain = scRL.design_effect(values, samples)
     assert out['icc'] < .1 and plain['icc'] > .6
     assert plain['icc'] > 5 * out['icc']
-    assert plain['predicted_false_call_rate'] > out['predicted_false_call_rate'] + .1
+    assert plain['implied_false_positive_rate'] > out['implied_false_positive_rate'] + .1
     assert out['n_samples'] == plain['n_samples'] == 8
     assert out['cells_per_sample'] == plain['cells_per_sample']
 

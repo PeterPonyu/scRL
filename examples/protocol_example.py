@@ -89,7 +89,7 @@ def run_example(seed=0):
             'icc': within['icc'], 'design_effect': within['design_effect'],
             # the share of readouts that do not differ at all which a test over cells would call at level 0.05:
             # it explains why cells are not the unit, and never permits a test over cells, however small it is
-            'predicted_false_call_rate': within['predicted_false_call_rate'], 'readouts': readouts}
+            'implied_false_positive_rate': within['implied_false_positive_rate'], 'readouts': readouts}
 
 
 def report(r):
@@ -108,8 +108,8 @@ def report(r):
           f"{r['ci_high']:+.3f});\n  {r['n_animals'][0]} and {r['n_animals'][1]} animals, {r['n_cells'][0]} and "
           f"{r['n_cells'][1]} cells.")
     print(f"  Within-animal correlation, within conditions: {r['icc']:.3f} (design effect "
-          f"{r['design_effect']:.1f}).\n  A test over cells is predicted to call about "
-          f"{r['predicted_false_call_rate']:.0%} of readouts that do not differ at all (level 0.05).")
+          f"{r['design_effect']:.1f}).\n  The design implies that a test over cells would call about "
+          f"{r['implied_false_positive_rate']:.0%} of readouts that do not differ at all (level 0.05).")
     print('  The six readouts, animal-level p-values and Benjamini-Hochberg q-values:')
     print(r['readouts'].to_string(formatters={'estimate': '{:+.3f}'.format, 'p_value': '{:.3g}'.format,
                                               'q_value': '{:.3g}'.format}))

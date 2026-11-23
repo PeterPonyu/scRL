@@ -13,7 +13,7 @@ import scRL
 EXAMPLE = Path(__file__).resolve().parents[1] / 'examples' / 'protocol_example.py'
 
 KEYS = {'cells', 'animals', 'conditions', 'test', 'statistic', 'df', 'estimate', 'ci_low', 'ci_high', 'p_value',
-        'n_animals', 'n_cells', 'icc', 'design_effect', 'predicted_false_call_rate', 'readouts'}
+        'n_animals', 'n_cells', 'icc', 'design_effect', 'implied_false_positive_rate', 'readouts'}
 READOUTS = ['readout', 'null_1', 'null_2', 'null_3', 'null_4', 'null_5']
 
 # The example's results for seed 0, computed once and fixed here, so that its printed output can be checked.
@@ -97,7 +97,7 @@ def test_the_within_animal_correlation_is_estimated_within_conditions_and_is_of_
     assert result['icc'] == within['icc'] and result['design_effect'] == within['design_effect']
     assert 0.005 < result['icc'] < 0.1                 # simulated: 0.03
     # the rate at which a test over cells would call readouts that do not differ lies above its level of 0.05
-    assert result['predicted_false_call_rate'] > 0.05
+    assert result['implied_false_positive_rate'] > 0.05
 
 
 def test_the_p_values_of_the_six_readouts_are_corrected_by_benjamini_hochberg(result):

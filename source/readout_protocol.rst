@@ -152,7 +152,7 @@ Step 4: what to report
     Step 4. case - control: +0.373 (95% interval +0.148 to +0.597);
       4 and 4 animals, 1600 and 1600 cells.
       Within-animal correlation, within conditions: 0.013 (design effect 6.2).
-      A test over cells is predicted to call about 47% of readouts that do not differ at all (level 0.05).
+      The design implies that a test over cells would call about 47% of readouts that do not differ at all (level 0.05).
       The six readouts, animal-level p-values and Benjamini-Hochberg q-values:
             estimate p_value q_value
     readout   +0.373 0.00662  0.0397
@@ -176,8 +176,8 @@ Report:
 - with many readouts, the Benjamini-Hochberg q-values of the animal-level p-values. The shifted readout keeps
   q = 0.040; the five readouts without an effect have q-values of 0.61 or more.
 
-The design effect and ``predicted_false_call_rate`` of ``design_effect`` say what a test over cells would do with
-these data: with this correlation and 400 cells per animal, it is predicted to call about 47% of readouts that do
+The design effect and ``implied_false_positive_rate`` of ``design_effect`` say what a test over cells would do with
+these data: with this correlation and 400 cells per animal, it would call about 47% of readouts that do
 not differ at all, at level 0.05. The rate explains why a test over cells over-calls. It is not a correction to apply to such a
 test, and a small rate never permits one. On these data a rank-sum test over the 3,200 cells gives p = 1.1e-25 for
 the shifted readout, against 0.0066 for the animal means, and a p-value below 0.05 for four of the five readouts

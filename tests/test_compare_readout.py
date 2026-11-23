@@ -762,8 +762,8 @@ def test_returned_design_effect_is_estimated_within_conditions():
         cells = scRL.compare_readout(v, s, g, test='cells')
     assert cells['design_effect'] == within
     message = next(str(r.message) for r in rec if 'independent unit' in str(r.message))
-    assert f"{within['predicted_false_call_rate']:.3g}" in message
-    assert f"{plain['predicted_false_call_rate']:.3g}" not in message
+    assert f"{within['implied_false_positive_rate']:.3g}" in message
+    assert f"{plain['implied_false_positive_rate']:.3g}" not in message
 
 
 SCALES = ('normal', 'rank', 'raw')

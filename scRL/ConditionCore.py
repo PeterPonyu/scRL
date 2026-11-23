@@ -1062,14 +1062,14 @@ def design_effect(values, samples, alpha=0.05, scale='rank', groups=None):
     test that counts every cell as independent rejects too often when groups of animals are compared. The
     intraclass correlation measures that resemblance (one-way analysis of variance, unequal sample sizes); the
     design effect ``1 + (m - 1) * ICC`` is the factor by which the variance of a mean over m cells per sample is
-    inflated, and the predicted false-call rate is the share of rejections expected from a two-sided cell-level
+    inflated, and the implied false-positive rate is the share of rejections expected from a two-sided cell-level
     test at level ``alpha`` when the conditions do not differ, if the variance of its statistic is inflated by
     the design effect and whole samples are assigned to the conditions at random. It is an estimate under that
     approximation, not a guarantee: it is less reliable with few samples or very unequal sample sizes. The
     sample-level tests of this module (``compare_fates(..., samples=...)``) are the remedy: they take the
     sample as the unit.
 
-    Two forms of the predicted rate are returned. With ``c`` the normal quantile of ``1 - alpha / 2`` divided by
+    Two forms of the implied rate are returned. With ``c`` the normal quantile of ``1 - alpha / 2`` divided by
     the square root of the design effect and ``k`` the number of samples, the normal form is ``2 * (1 - Phi(c))``.
     The few-sample form assumes that the ``k`` samples are divided into two groups and refers the same quantity
     to a t distribution: ``2 * P(t > c * sqrt(k - 2) / sqrt(k - 1 - c**2))`` with ``k - 2`` degrees of freedom,
@@ -1095,7 +1095,7 @@ def design_effect(values, samples, alpha=0.05, scale='rank', groups=None):
     ``n0 = sum_g (N_g - sum_i n_gi**2 / N_g) / (k - G)``; and
     ``ICC = (MSB - MSW) / (MSB + (n0 - 1) * MSW)``. With one condition these are the expressions used without
     ``groups``. The ranks, the design effect (m is the mean number of cells per sample over all samples) and
-    the predicted rates (k is the number of all samples) are taken as without ``groups``.
+    the implied rates (k is the number of all samples) are taken as without ``groups``.
 
     Parameters
     ----------
@@ -1109,7 +1109,7 @@ def design_effect(values, samples, alpha=0.05, scale='rank', groups=None):
         One label per cell naming its replicate (animal, donor, library). Cells with a missing label are
         dropped.
     alpha
-        Level of the cell-level test whose false-call rate is predicted; between 0 and 1, exclusive.
+        Level of the cell-level test whose false-positive rate is implied; between 0 and 1, exclusive.
         (Default: 0.05)
     scale
         'rank': replace the values by their average ranks over all kept cells before anything else; 'raw':
@@ -1126,8 +1126,8 @@ def design_effect(values, samples, alpha=0.05, scale='rank', groups=None):
     A plain ``dict`` (not a table, unlike the comparison functions of this module) with ``n_cells`` and
     ``n_samples`` kept, ``cells_per_sample`` (m, the mean number of kept cells per sample), ``icc`` (as
     estimated, possibly negative), ``design_effect`` (1 when the estimate is not positive),
-    ``predicted_false_call_rate`` (the few-sample form with three or more samples; with two samples it equals
-    the normal form), ``predicted_false_call_rate_normal`` (the normal form),
+    ``implied_false_positive_rate`` (the few-sample form with three or more samples; with two samples it equals
+    the normal form), ``implied_false_positive_rate_normal`` (the normal form),
     ``effective_cells_per_sample`` (m divided by the design effect), ``alpha``, ``scale``, ``n_dropped``
     (cells left out for a missing value, a missing sample label or, with ``groups``, a missing condition) and
     ``within_groups`` (True when ``groups`` was given).
@@ -1191,8 +1191,8 @@ def design_effect(values, samples, alpha=0.05, scale='rank', groups=None):
     normal = float(2 * (1 - stats.norm.cdf(c)))
     return {'n_cells': int(N), 'n_samples': int(k), 'cells_per_sample': float(m), 'icc': icc,
             'design_effect': float(deff),
-            'predicted_false_call_rate': _few_sample_rate(c, k) if k >= 3 else normal,
-            'predicted_false_call_rate_normal': normal,
+            'implied_false_positive_rate': _few_sample_rate(c, k) if k >= 3 else normal,
+            'implied_false_positive_rate_normal': normal,
             'effective_cells_per_sample': float(m / deff), 'alpha': float(alpha), 'scale': scale,
             'n_dropped': n_dropped, 'within_groups': groups is not None}
 
@@ -1458,7 +1458,7 @@ def compare_readout(values, samples, groups, test='auto', alpha=0.05, n_relabel=
     test
         'auto', 'pooled', 'welch', 'relabel', 'mixed' or 'cells'. (Default: 'auto')
     alpha
-        Level used for the warning of the relabelling test and for the predicted false-positive rate of
+        Level used for the warning of the relabelling test and for the implied false-positive rate of
         ``design_effect``; the confidence interval (``ci_low``, ``ci_high``) has level 1 - alpha. Between 0 and 1,
         exclusive. (Default: 0.05)
     n_relabel
@@ -1570,8 +1570,8 @@ def compare_readout(values, samples, groups, test='auto', alpha=0.05, n_relabel=
         res = stats.mannwhitneyu(x[cell_side == 0], x[cell_side == 1], method='asymptotic')
         statistic, p = float(res.statistic), float(res.pvalue)
         warnings.warn("test='cells' treats every cell as an independent unit; given the within-sample correlation "
-                      f"of these data its predicted false-positive rate at level {alpha} is "
-                      f"{deff['predicted_false_call_rate']:.3g} when the conditions do not differ. "
+                      f"of these data its implied false-positive rate at level {alpha} is "
+                      f"{deff['implied_false_positive_rate']:.3g} when the conditions do not differ. "
                       "Use 'pooled' for inference.", UserWarning)
     return {'test': run, 'scale': used, 'statistic': statistic, 'p_value': p, 'df': df,
             'estimate': float(m1.mean() - m2.mean()), 'estimate_scaled': scaled, 'ci_low': ci[0], 'ci_high': ci[1],
