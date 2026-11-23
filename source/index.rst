@@ -89,6 +89,7 @@ scRL: Utilizing Reinforcement Learning to Evaluate Fate Decisions in Single-Cell
    grid3d
    exact
    conditions
+   readout_protocol
    testdata
 
 .. toctree::

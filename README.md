@@ -173,6 +173,8 @@ scRL.plot_conditions(gres)
 
 With several libraries per condition pass `samples=` (one library label per cell) to `compare_abundance` and `compare_fates`: the share of each library's cells per lineage (and, when clusters are projected, per cluster) is then compared across libraries, which is where a difference between conditions can be shown with a handful of libraries; `scRL.shares_by_sample` gives the per-library table. Cluster shares are compared across libraries on a log scale by default (`scale='log'`: log2 of the share after adding 0.5 to the cell count and 1 to the cell total, so a change in one cluster is not swamped by the large clusters); lineage labels keep the share scale (`scale='share'`), because the log scale is unsafe for a category with no cells inside a selection whose size differs between conditions. A difference in lineage shares is first of all a difference in which cell states are present: in `compare_fates`, read it with `standardise=True` (on the clusters present in every library: the difference after reweighting to one cluster composition, and the difference split into a composition part and a within-cluster part), look for shifts within cell states with `within=` and `stat='mean'`, and give `pairs=` when libraries form blocks.
 
+A worked example of the protocol for comparing a per-cell readout between conditions, on simulated animals, is `examples/protocol_example.py`; the documentation page [Protocol: comparing a per-cell readout between conditions](https://scrl.readthedocs.io/en/latest/readout_protocol.html) (`source/readout_protocol.rst`) walks through it.
+
 ## Documentation
 
 Comprehensive documentation is available at [https://scrl.readthedocs.io](https://scrl.readthedocs.io/en/latest/)
