@@ -70,7 +70,7 @@ def run_example(seed=0):
     animals['p_without'] = [r['p_value'] for r in without]
 
     # Step 3. Test the animal means: the pooled t-test here, four animals against four with 400 cells each. Never
-    # compare a group of two animals; compare_readout refuses a group of one but accepts two without a warning.
+    # compare a group of two animals; compare_readout refuses a group of one and warns for a group of two.
     res = compare(cells)
 
     # Step 4. Report the difference of the animal means (case minus control: the conditions are taken in

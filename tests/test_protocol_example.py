@@ -124,18 +124,18 @@ def test_a_rank_sum_test_over_cells_gives_a_p_value_far_below_that_of_the_animal
     assert over_cells < result['p_value'] / 1000
 
 
-def test_a_group_of_two_animals_is_tested_without_a_warning_and_a_group_of_one_is_refused(result):
+def test_a_group_of_two_animals_is_tested_with_a_warning_and_a_group_of_one_is_refused(result):
     # compare_readout documents that each condition needs at least two samples, and refuses fewer; a group of two
-    # is accepted without a warning (its guidance says to avoid one), so keeping three or more is for the analyst
+    # is accepted with a UserWarning (its guidance says to avoid one)
     cells = result['cells']
 
     def keep(*animals):
         part = cells[cells['animal'].isin(animals)]
         return part['readout'], part['animal'], part['condition']
 
-    with warnings.catch_warnings():
-        warnings.simplefilter('error')
+    with pytest.warns(UserWarning, match='group of two is not recommended'):
         two = scRL.compare_readout(*keep('case1', 'case2', 'control1', 'control2'), test='auto')
+    with pytest.warns(UserWarning, match='group of two is not recommended'):
         unequal = scRL.compare_readout(*keep('case1', 'case2', 'control1', 'control2', 'control3', 'control4'),
                                        test='auto')
     assert two['test'] == 'pooled' and two['n_samples'] == (2, 2) and two['df'] == 2

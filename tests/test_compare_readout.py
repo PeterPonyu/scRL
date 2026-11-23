@@ -479,6 +479,7 @@ def test_auto_runs_welch_on_raw_sample_means_with_unequal_numbers_of_samples(k1,
     values, samples, groups = _numbers(k1, k2, cells_a, cells_b, seed=k1 + k2)
     with warnings.catch_warnings():
         warnings.simplefilter('error')
+        warnings.filterwarnings('ignore', message='A group of two is not recommended')
         out = scRL.compare_readout(values, samples, groups)
         assert scRL.compare_readout(values, samples, groups, test='auto') == out
     assert out['n_samples'] == (k1, k2) and out['cells_per_sample_ratio'] < 3     # similar numbers of cells per sample
@@ -497,6 +498,7 @@ def test_auto_runs_pooled_with_equal_numbers_of_samples_and_a_ratio_below_three(
     values, samples, groups = _numbers(k // 2, k // 2, cells_a, cells_b, seed=k)
     with warnings.catch_warnings():
         warnings.simplefilter('error')
+        warnings.filterwarnings('ignore', message='A group of two is not recommended')
         out = scRL.compare_readout(values, samples, groups)
     assert out['n_samples'] == (k // 2, k // 2) and out['cells_per_sample_ratio'] < 3
     assert out['test'] == 'pooled' and out['scale'] == 'raw'
@@ -513,6 +515,7 @@ def test_auto_runs_welch_with_equal_numbers_of_samples_and_a_ratio_of_at_least_t
     values, samples, groups = _numbers(k // 2, k // 2, cells_a, cells_b, seed=k)
     with warnings.catch_warnings():
         warnings.simplefilter('error')
+        warnings.filterwarnings('ignore', message='A group of two is not recommended')
         out = scRL.compare_readout(values, samples, groups)
     assert out['n_samples'] == (k // 2, k // 2) and out['cells_per_sample_ratio'] >= 3
     assert out['test'] == 'welch' and out['scale'] == 'raw'
@@ -554,6 +557,7 @@ def test_pooled_by_name_warns_with_unequal_numbers_of_samples_and_still_runs(k1,
     values, samples, groups = _numbers(k1, k2, 6, 6, seed=k1)
     with pytest.warns(UserWarning, match='unequal numbers of samples') as rec:
         out = scRL.compare_readout(values, samples, groups, test='pooled')
+    rec = [w for w in rec if 'group of two' not in str(w.message)]    # a group of two has its own warning
     assert len(rec) == 1                                 # similar numbers of cells per sample: no second warning
     message = ' '.join(str(rec[0].message).split())
     assert f'({k1} and {k2})' in message
@@ -1036,3 +1040,33 @@ def test_importable_from_top_level():
     from scRL import compare_readout
     assert compare_readout is scRL.compare_readout
     assert 'compare_readout' in scRL.__all__
+
+
+@pytest.mark.parametrize('k1, k', [(2, 4), (2, 6)])
+def test_a_group_of_two_samples_warns_that_it_is_not_recommended(k1, k):
+    values, samples, groups = _design(np.arange(k, dtype=float), cells=4, sd=0.5, k1=k1)
+    with pytest.warns(UserWarning, match='group of two is not recommended') as record:
+        res = scRL.compare_readout(values, samples, groups)
+    assert res['n_samples'] == (k1, k - k1)
+    messages = [str(w.message) for w in record if 'group of two' in str(w.message)]
+    assert len(messages) == 1
+    assert 'at least three animals per condition' in messages[0] and '0.086' in messages[0]
+
+
+def test_a_group_of_two_against_two_warns():
+    values, samples, groups = _design([0.0, 1.0, 2.0, 3.0], cells=4, sd=0.5)
+    with pytest.warns(UserWarning, match='group of two is not recommended'):
+        scRL.compare_readout(values, samples, groups)
+
+
+def test_three_against_three_gives_no_group_of_two_warning():
+    values, samples, groups = _design(np.arange(6, dtype=float), cells=4, sd=0.5)
+    with warnings.catch_warnings():
+        warnings.simplefilter('error')
+        scRL.compare_readout(values, samples, groups)
+
+
+def test_a_group_of_one_still_raises():
+    values, samples, groups = _design(np.arange(4, dtype=float), cells=4, sd=0.5, k1=1)
+    with pytest.raises(ValueError, match='each condition needs at least two samples; found 1 and 3'):
+        scRL.compare_readout(values, samples, groups)

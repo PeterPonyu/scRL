@@ -132,8 +132,9 @@ number of cells. Here both conditions have four animals of 400 cells each, so th
     Step 3. The pooled t-test of the animal means: t = 4.06 on 6 df, p = 0.00662.
 
 Never compare a group of two animals: the spread between the animals of that condition is then estimated from a
-single difference. ``compare_readout`` refuses a condition with one animal, but with ``test='auto'`` it accepts a
-condition with two animals without a warning, so keeping at least three animals per condition is up to the analyst.
+single difference. ``compare_readout`` refuses a condition with one animal; a condition with two animals is still compared, but
+the function issues a ``UserWarning`` that a group of two is not recommended. Use at least three animals per
+condition, and report the animal values descriptively if no more are available.
 
 Step 4: what to report
 ----------------------

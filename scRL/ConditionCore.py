@@ -1412,7 +1412,9 @@ def compare_readout(values, samples, groups, test='auto', alpha=0.05, n_relabel=
     means; with the pooled t-test for conditions with equal numbers of samples and similar numbers of cells per
     sample, and with the Welch t-test when the numbers of samples differ or the numbers of cells per sample differ
     about threefold or more between the conditions (see ``cells_per_sample_ratio`` below), which is what
-    ``'auto'`` does; and avoid conditions with two samples. ``scale='normal'`` or ``'rank'`` are options for
+    ``'auto'`` does; and avoid conditions with two samples (a condition with exactly two samples is still
+    compared, with a ``UserWarning`` that a group of two is not recommended; fewer than two raises
+    ``ValueError``). ``scale='normal'`` or ``'rank'`` are options for
     continuous readouts without tied values, with the effect then reported on that scale (``estimate_scaled``),
     because on readouts with many tied cells the sign on normal scores contradicted the raw difference in some
     comparisons (see above). When one set of animals was divided into two groups with similar numbers of cells
@@ -1515,6 +1517,12 @@ def compare_readout(values, samples, groups, test='auto', alpha=0.05, n_relabel=
     x, codes, side, order, n_dropped = _readout_cells(values, samples, groups)
     k = len(side)
     n_samples = (int((side == 0).sum()), int((side == 1).sum()))
+    if min(n_samples) == 2:
+        warnings.warn('A group of two is not recommended: a t-test on two animal means has almost no power, and '
+                      "Welch's test with a group of two rejects too often (in the checks behind this package, about "
+                      '0.086 against a nominal 0.05 at two against six). Use at least three animals per condition, '
+                      'and report the animal values descriptively if no more are available.', UserWarning,
+                      stacklevel=2)
     cell_side = side[codes]
     n_cells = (int((cell_side == 0).sum()), int((cell_side == 1).sum()))
     sizes = np.bincount(codes)
