@@ -918,6 +918,120 @@ def test_the_check_for_sample_means_without_spread_is_made_on_the_scale_of_the_t
             scRL.compare_readout(values, samples, groups, test=test, scale=scale)
 
 
+def _ci(out):
+    return out['ci_low'], out['ci_high']
+
+
+def _scipy_ci(a, b, equal_var, alpha):
+    """scipy's (1 - alpha) interval of mean(a) - mean(b). scipy subtracts the second group from the first, so
+    condition 1 passed first gives the orientation of estimate: condition 1 minus condition 2."""
+    ci = stats.ttest_ind(a, b, equal_var=equal_var).confidence_interval(confidence_level=1 - alpha)
+    return ci.low, ci.high
+
+
+@pytest.mark.parametrize('alpha', [0.05, 0.1])
+@pytest.mark.parametrize('k1, k2', [(3, 3), (3, 4)])
+@pytest.mark.parametrize('test, equal_var', [('pooled', True), ('welch', False)])
+def test_interval_is_scipys_interval_of_the_difference_of_the_sample_means(test, equal_var, k1, k2, alpha):
+    k = k1 + k2
+    values, samples, groups = _design([0, 1, 5, 2, 6, 4, 3][:k], cells=[2, 5, 9, 9, 2, 5, 4][:k], sd=1, seed=2,
+                                      k1=k1)
+    means = _sample_means(values, samples)                      # unweighted, condition 'a' first
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')                         # the pooled t-test by name warns for 3 against 4
+        out = scRL.compare_readout(values, samples, groups, test=test, alpha=alpha)
+        flipped = scRL.compare_readout(values, samples, pd.Categorical(groups, categories=['b', 'a']), test=test,
+                                       alpha=alpha)
+    assert out['test'] == test and out['condition_1'] == 'a'
+    assert out['estimate'] == pytest.approx(means[:k1].mean() - means[k1:].mean(), abs=1e-10)
+    assert _ci(out) == pytest.approx(_scipy_ci(means[:k1], means[k1:], equal_var, alpha), abs=1e-10)
+    assert type(out['ci_low']) is float and type(out['ci_high']) is float
+    # with the conditions in the other order the estimate and its interval change sign together
+    assert flipped['estimate'] == pytest.approx(-out['estimate'], abs=1e-10)
+    assert _ci(flipped) == pytest.approx((-out['ci_high'], -out['ci_low']), abs=1e-10)
+
+
+@pytest.mark.parametrize('test, df', [('pooled', 4), ('welch', 2.56)])
+def test_interval_by_hand(test, df):
+    # sample means 1, 2, 3 against 4, 5, 9: difference -4; variances 1 and 7, so the pooled variance is 4 and the
+    # standard error sqrt(4 * (1/3 + 1/3)) = sqrt(8/3); Welch's standard error sqrt(1/3 + 7/3) is the same here, but
+    # its degrees of freedom are (8/3)**2 / ((1/3)**2 / 2 + (7/3)**2 / 2) = 2.56 in place of 3 + 3 - 2 = 4
+    out = scRL.compare_readout(*_hand(), test=test)
+    half = stats.t.ppf(0.975, df) * np.sqrt(8 / 3)
+    assert out['df'] == pytest.approx(df)
+    assert _ci(out) == pytest.approx((-4 - half, -4 + half), abs=1e-10)
+
+
+@pytest.mark.parametrize('k1, k2, cells_a, cells_b, chosen', [(4, 4, 6, 6, 'pooled'), (4, 4, 6, 2, 'welch'),
+                                                               (3, 5, 6, 6, 'welch')])
+def test_auto_reports_the_interval_of_the_test_it_chooses(k1, k2, cells_a, cells_b, chosen):
+    values, samples, groups = _numbers(k1, k2, cells_a, cells_b, seed=5)
+    auto = scRL.compare_readout(values, samples, groups)
+    named = scRL.compare_readout(values, samples, groups, test=chosen)
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        unchosen = scRL.compare_readout(values, samples, groups, test='welch' if chosen == 'pooled' else 'pooled')
+    assert auto['test'] == chosen
+    assert _ci(auto) == _ci(named)
+    assert abs(unchosen['ci_low'] - auto['ci_low']) > 1e-6
+
+
+@pytest.mark.parametrize('test', ['auto', 'pooled', 'welch'])
+def test_interval_contains_the_estimate(test):
+    # a large difference, so that an interval of the opposite sign could not contain the estimate
+    values, samples, groups = _design([0, 1, 2, 6, 7, 8], cells=[3, 8, 5, 4, 6, 9], sd=1, seed=8)
+    out = scRL.compare_readout(values, samples, groups, test=test)
+    assert out['estimate'] < -4
+    assert out['ci_low'] < out['estimate'] < out['ci_high']
+    assert (out['ci_low'] + out['ci_high']) / 2 == pytest.approx(out['estimate'], abs=1e-10)
+
+
+@pytest.mark.parametrize('test', ['pooled', 'welch'])
+def test_alpha_of_one_tenth_gives_a_narrower_interval_inside_that_of_one_twentieth(test):
+    values, samples, groups = _skewed()
+    wide = scRL.compare_readout(values, samples, groups, test=test, alpha=0.05)
+    narrow = scRL.compare_readout(values, samples, groups, test=test, alpha=0.1)
+    assert wide['ci_low'] < narrow['ci_low'] < narrow['ci_high'] < wide['ci_high']
+    assert narrow['ci_high'] - narrow['ci_low'] < wide['ci_high'] - wide['ci_low']
+    assert narrow['p_value'] == wide['p_value'] and narrow['estimate'] == wide['estimate']
+
+
+@pytest.mark.parametrize('test', ['relabel', 'mixed', 'cells'])
+def test_interval_is_nan_for_the_tests_that_are_not_t_tests_on_sample_means(test):
+    rng = np.random.default_rng(21)
+    values, samples, groups = _clustered(8, 40, .2, rng, shift=.4)
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')                         # test='cells' always warns
+        out = scRL.compare_readout(values, samples, groups, test=test)
+    assert out['test'] == test and out['fallback'] is False
+    assert np.isnan(out['ci_low']) and np.isnan(out['ci_high'])
+    assert type(out['ci_low']) is float and type(out['ci_high']) is float
+
+
+def test_interval_of_the_mixed_model_fallback_is_that_of_the_pooled_t_test_in_its_place():
+    # the data of the fallback test above: no sample effect, so the variance between samples is estimated as zero
+    sizes = (15, 40, 8, 125, 20, 47, 90, 61)
+    values = np.random.default_rng(3).standard_normal(sum(sizes))
+    samples = np.repeat(np.arange(8), sizes)
+    groups = np.repeat(list('aaaabbbb'), sizes)
+    with pytest.warns(RuntimeWarning, match='t-test on the sample means'):
+        out = scRL.compare_readout(values, samples, groups, test='mixed', alpha=0.1)
+    assert out['fallback'] is True
+    means = _sample_means(_on_scale(values, 'normal'), samples)  # no sample has more than max_cells cells
+    assert _ci(out) == pytest.approx(_scipy_ci(means[:4], means[4:], True, 0.1), abs=1e-10)
+
+
+@pytest.mark.parametrize('scale', ['rank', 'normal'])
+@pytest.mark.parametrize('test, equal_var', [('pooled', True), ('welch', False)])
+def test_interval_is_on_the_scale_of_estimate_scaled(test, equal_var, scale):
+    values, samples, groups = _skewed()
+    means = _sample_means(_on_scale(values, scale), samples)
+    out = scRL.compare_readout(values, samples, groups, test=test, scale=scale)
+    assert _ci(out) == pytest.approx(_scipy_ci(means[:3], means[3:], equal_var, 0.05), abs=1e-10)
+    assert (out['ci_low'] + out['ci_high']) / 2 == pytest.approx(out['estimate_scaled'], abs=1e-10)
+    assert abs(out['estimate_scaled'] - out['estimate']) > 0.1  # not the scale of the raw estimate
+
+
 def test_importable_from_top_level():
     from scRL import compare_readout
     assert compare_readout is scRL.compare_readout

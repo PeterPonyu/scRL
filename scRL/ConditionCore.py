@@ -1249,6 +1249,13 @@ def _means_t_test(m1, m2, equal_var=True):
     return stats.ttest_ind(m1, m2, equal_var=equal_var)
 
 
+def _interval(res, alpha):
+    """The (1 - alpha) confidence interval of the difference of means of a two-sample t-test from scipy, first group
+    minus second, from the t distribution of that test."""
+    ci = res.confidence_interval(confidence_level=1 - alpha)
+    return float(ci.low), float(ci.high)
+
+
 def _suitable_tests(k, ratio=1.0, equal_numbers=True):
     """The tests the guidance of compare_readout names for k samples in total, a ratio of cells per sample and
     conditions with equal or unequal numbers of samples."""
@@ -1304,10 +1311,11 @@ def _relabel_test(ranks, codes, side_of_sample, n_relabel, seed):
     return observed, float(min(p, 1.0)), float(smallest)
 
 
-def _mixed_test(ranks, codes, side_of_sample, max_cells, seed):
+def _mixed_test(ranks, codes, side_of_sample, max_cells, seed, alpha):
     """Condition effect on rank-based normal scores with a random intercept per sample, by REML.
 
-    Returns the statistic and whether the t-test on the sample means of the scores had to stand in."""
+    Returns the statistic, whether the t-test on the sample means of the scores had to stand in, and the (1 - alpha)
+    confidence interval of that t-test (NaN at both ends when the model was fitted)."""
     try:
         from statsmodels.regression.mixed_linear_model import MixedLM
     except ImportError as err:
@@ -1330,13 +1338,13 @@ def _mixed_test(ranks, codes, side_of_sample, max_cells, seed):
             except (np.linalg.LinAlgError, ValueError, FloatingPointError):
                 continue
         if getattr(fit, 'converged', False) and np.isfinite(fit.bse[1]) and fit.bse[1] > 0:
-            return float(fit.params[1] / fit.bse[1]), False
+            return float(fit.params[1] / fit.bse[1]), False, (np.nan, np.nan)
     means = np.bincount(codes[rows], weights=scores[rows]) / np.bincount(codes[rows])
     res = _means_t_test(means[side_of_sample == 0], means[side_of_sample == 1])
     warnings.warn('The mixed model estimated the random-effect variance between samples as zero or could not be '
                   'fitted; the pooled t-test on the sample means of the normal scores was used instead.',
                   RuntimeWarning)
-    return float(res.statistic), True
+    return float(res.statistic), True, _interval(res, alpha)
 
 
 def compare_readout(values, samples, groups, test='auto', alpha=0.05, n_relabel=2000, max_cells=300, seed=0,
@@ -1449,7 +1457,8 @@ def compare_readout(values, samples, groups, test='auto', alpha=0.05, n_relabel=
         'auto', 'pooled', 'welch', 'relabel', 'mixed' or 'cells'. (Default: 'auto')
     alpha
         Level used for the warning of the relabelling test and for the predicted false-positive rate of
-        ``design_effect``; between 0 and 1, exclusive. (Default: 0.05)
+        ``design_effect``; the confidence interval (``ci_low``, ``ci_high``) has level 1 - alpha. Between 0 and 1,
+        exclusive. (Default: 0.05)
     n_relabel
         Number of relabellings above which the relabelling test samples instead of enumerating; a positive
         integer. (Default: 2000)
@@ -1459,7 +1468,9 @@ def compare_readout(values, samples, groups, test='auto', alpha=0.05, n_relabel=
         Seed of the random relabellings and of the cell subsets of the mixed model. (Default: 0)
     scale
         'raw', 'rank' or 'normal': the scale on which each sample is summarised for the pooled and Welch
-        t-tests, as described above. The other tests ignore it. (Default: 'raw')
+        t-tests, as described above; the other tests ignore it. Raw sample means are the recommended scale.
+        'rank' and 'normal' remain available but are not recommended: on real contrasts they gained no power,
+        and their calls replicated less in other animals. (Default: 'raw')
 
     Returns
     ----------
@@ -1469,7 +1480,16 @@ def compare_readout(values, samples, groups, test='auto', alpha=0.05, n_relabel=
     2, for every test; always on the readout's own scale, so that the size of the difference can be read; the
     test is on the scale named in ``scale``), ``estimate_scaled`` (the same difference of the per-sample means on
     the scale of the test, the effect to report with ``'rank'`` or ``'normal'``; equal to ``estimate`` for
-    ``'raw'``; None for the tests that ignore ``scale``),
+    ``'raw'``; None for the tests that ignore ``scale``), ``ci_low`` and ``ci_high`` (the confidence interval at
+    level 1 - ``alpha`` of that difference, on the scale of the test and in the orientation of ``estimate``,
+    condition 1 minus condition 2: the interval of ``estimate`` with ``'raw'``, of ``estimate_scaled`` with
+    ``'rank'`` or ``'normal'``. It comes from the t distribution the test used: the pooled variance with
+    n1 + n2 - 2 degrees of freedom for ``'pooled'``, Welch's standard error with the Welch-Satterthwaite degrees
+    of freedom for ``'welch'``, n1 and n2 being the numbers of samples. The relabelling test, the mixed model and
+    ``'cells'`` are not t-tests on sample means, and both ends are NaN for them, with one exception: when the
+    mixed model was replaced by the pooled t-test on the samples' mean normal scores, as ``fallback`` reports, the
+    interval is that of this t-test, on the scale of those normal scores and so not an interval for
+    ``estimate``),
     ``condition_1`` and ``condition_2``, ``n_samples`` and ``n_cells`` (a tuple per condition), ``n_dropped``
     (cells left out for a missing value, sample or group),
     ``cells_per_sample_ratio`` (the larger over the smaller of the two conditions' mean numbers of cells per
@@ -1520,7 +1540,7 @@ def compare_readout(values, samples, groups, test='auto', alpha=0.05, n_relabel=
         raise ValueError(f"test={run!r} needs more than one cell per sample; every sample has one value here. "
                          "Use 'pooled'.")
     deff = None if single else design_effect(x, codes, alpha=alpha, groups=side[codes])
-    df, smallest, fallback, used, scaled = None, None, False, None, None
+    df, smallest, fallback, used, scaled, ci = None, None, False, None, None, (np.nan, np.nan)
     if run in ('pooled', 'welch'):
         z = x if scale == 'raw' else ranks if scale == 'rank' else _normal_scores(ranks, len(ranks))
         z_means = np.bincount(codes, weights=z) / sizes
@@ -1528,14 +1548,14 @@ def compare_readout(values, samples, groups, test='auto', alpha=0.05, n_relabel=
         res = _means_t_test(z1, z2, equal_var=run == 'pooled')
         statistic, p = float(res.statistic), float(res.pvalue)
         df = float(res.df) if run == 'welch' else float(k - 2)
-        used, scaled = scale, float(z1.mean() - z2.mean())
+        used, scaled, ci = scale, float(z1.mean() - z2.mean()), _interval(res, alpha)
     elif run == 'relabel':
         statistic, p, smallest = _relabel_test(ranks, codes, side, n_relabel, seed)
         if smallest > alpha:
             warnings.warn(f'The relabelling test cannot reject at level {alpha} with {n_samples[0]} and '
                           f'{n_samples[1]} samples: its smallest attainable p-value is {smallest:.3g}.', UserWarning)
     elif run == 'mixed':
-        statistic, fallback = _mixed_test(ranks, codes, side, max_cells, seed)
+        statistic, fallback, ci = _mixed_test(ranks, codes, side, max_cells, seed, alpha)
         df = float(k - 2)
         p = float(2 * stats.t.sf(abs(statistic), df))
     else:
@@ -1546,7 +1566,7 @@ def compare_readout(values, samples, groups, test='auto', alpha=0.05, n_relabel=
                       f"{deff['predicted_false_call_rate']:.3g} when the conditions do not differ. "
                       "Use 'pooled' for inference.", UserWarning)
     return {'test': run, 'scale': used, 'statistic': statistic, 'p_value': p, 'df': df,
-            'estimate': float(m1.mean() - m2.mean()), 'estimate_scaled': scaled,
+            'estimate': float(m1.mean() - m2.mean()), 'estimate_scaled': scaled, 'ci_low': ci[0], 'ci_high': ci[1],
             'condition_1': order[0], 'condition_2': order[1], 'n_samples': n_samples, 'n_cells': n_cells,
             'n_dropped': n_dropped, 'cells_per_sample_ratio': ratio, 'suitable_tests': suitable,
             'smallest_p': smallest,
