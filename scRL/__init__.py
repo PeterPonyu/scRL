@@ -37,4 +37,4 @@ __all__ = ['grids_from_embedding', 'align_pseudotime', 'project_cluster', 'proje
            # Backward compatibility
            , 'lineage_rewards', 'gene_rewards', 'project_expression']
 
-__version__ = '0.0.9'
+__version__ = '2.0.0'

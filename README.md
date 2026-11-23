@@ -36,6 +36,7 @@ Core dependencies (automatically installed):
 - numpy >= 1.23.5
 - pandas >= 1.5.2
 - scikit-learn >= 1.2.1
+- scipy >= 1.11
 - networkx >= 2.8.8
 - matplotlib >= 3.6.3
 - seaborn >= 0.11.2
