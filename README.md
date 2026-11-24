@@ -10,52 +10,34 @@
 
 ## Overview
 
-**scRL** (single-cell Reinforcement Learning) is a computational framework that applies reinforcement learning to single-cell RNA sequencing data to study cellular fate decisions. By treating cell differentiation as a sequential decision-making process, scRL is designed to help analyze when and where fate commitments emerge during development and disease.
+**scRL** (single-cell Reinforcement Learning) applies reinforcement learning to single-cell RNA sequencing data to
+study cell fate decisions. It treats differentiation as a sequence of decisions on a grid built over the cells, to
+study when and where commitment to a fate emerges.
 
 ### Key Features
 
-- **Actor-Critic Architecture**: Uses deep reinforcement learning to model cellular differentiation trajectories
-- **Grid-Based Embedding**: Transforms high-dimensional single-cell data into an interpretable 2-D or 3-D grid
-- **Fate Decision Detection**: Identifies early decision points that precede overt lineage commitment
-- **Multiple Analysis Modes**:
-  - **Gene Module**: Analyzes gene expression patterns and regulatory roles
-  - **Lineage Module**: Evaluates lineage commitments and differentiation potentials
-  - **Trajectory Module**: Simulates and visualizes differentiation pathways
-- **Flexible Reward Systems**: Supports both contribution-based and decision-based reward patterns
+- **Grids over an embedding**: 2-D or 3-D grids (4-D and 5-D experimental) built over the cells
+- **Decision and contribution values**: learned by an actor-critic agent, or computed exactly without training
+- **Analysis modes**: gene, lineage and trajectory modules
+- **Rewards**: contribution-based or decision-based
+- **Comparing conditions**: grid-based comparisons, and a test of per-cell readouts with the sample as the unit
 
 ## Installation
 
-### Requirements
-
-- Python >= 3.9
-- PyTorch >= 1.13.1
-- CUDA support (optional, for GPU acceleration)
-
-Core dependencies (automatically installed):
-- anndata >= 0.8.0
-- numpy >= 1.23.5
-- pandas >= 1.5.2
-- scikit-learn >= 1.2.1
-- scipy >= 1.11
-- networkx >= 2.8.8
-- matplotlib >= 3.6.3
-- seaborn >= 0.11.2
-- joblib >= 1.2.0
-- tqdm >= 4.64.1
-- pygam >= 0.8.0
-
-### Install from PyPI
+Requires Python 3.9 or later and PyTorch 1.13.1 or later; a GPU is optional. The other dependencies install with the
+package.
 
 ```bash
 pip install scrl-fatedecision
 ```
 
-**Note**: For the examples in this README, you'll also need Scanpy with its Leiden clustering extra:
+The examples below also use Scanpy with Leiden clustering:
+
 ```bash
 pip install "scanpy[leiden]"
 ```
 
-### Install from Source
+To install from source:
 
 ```bash
 git clone https://github.com/PeterPonyu/scRL.git
@@ -65,7 +47,8 @@ pip install -e .
 
 ## Quick Start
 
-This example follows the [Basics of scRL](https://scrl.readthedocs.io/en/latest/notebook/Basics_on_scRL.html) tutorial. `grids_from_embedding` returns the grid results object `gres`; `project_cluster`, `align_pseudotime`, `d_rewards`, `get_state_value` and `project_back` store their results in `gres` and return `None`.
+This example follows the [Basics of scRL](https://scrl.readthedocs.io/en/latest/notebook/Basics_on_scRL.html)
+tutorial. `grids_from_embedding` returns a grid object, `gres`; the later steps store their results in it.
 
 ```python
 import scRL
@@ -116,11 +99,13 @@ scRL.project_back(gres, 'decision_value')
 adata.obs['decision_value'] = gres.embedding['decision_value']
 ```
 
-The cluster labels come from the tutorial's Leiden clustering, where cluster `'4'` holds the starting cells and `'0'`, `'3'` and `'5'` are the myeloid target clusters. Leiden labels depend on the clustering run, so set `early_cluster`, `starts` and `ends` from the clusters in your own data.
+In this tutorial, Leiden cluster `'4'` holds the starting cells and `'0'`, `'3'` and `'5'` are the myeloid targets.
+Cluster labels change between clustering runs, so choose `early_cluster`, `starts` and `ends` from your own data.
 
 ## 3-D grids
 
-The same pipeline runs on a 3-D embedding, for example a three-component UMAP. `grids_from_embedding` keeps the grid points where cells lie and adds one layer of grid points around them, which forms the boundary of the grid. The grid is built the same way for any 3-D embedding.
+The same steps run on a 3-D embedding, such as a three-component UMAP. The grid covers the cells and one layer of
+boundary points around them.
 
 ```python
 sc.tl.umap(adata, n_components=3)
@@ -138,15 +123,29 @@ scRL.project_back(gres, 'decision_value')
 scRL.plot_grids(gres, key='decision_value')          # grid points coloured by decision value
 ```
 
-In 3-D the agent moves one grid step along one axis at a time, so it has six moves instead of the eight of the 2-D grid. `n` is the number of grid points across the widest axis of the data (30 by default in 3-D), and `radius` sets how far from the cells the grid extends, in grid steps. `scRL.plot_grids` draws the grid, or the cells, coloured by any stored value; `interactive=True` gives a figure you can rotate (needs plotly). As in 2-D, training outcomes vary between random seeds, so look at the return curve and repeat the training with a few seeds. 4-D and 5-D embeddings are also accepted, but this is experimental.
-
-A complete script on the paul15 data is in `examples/grid3d_paul15.py`.
-
-`examples/grid3d_walkthrough.py` runs every mode on a 3-D grid of the same data and writes its figures to `grid3d_walkthrough_output/`. `python examples/grid3d_walkthrough.py --check`, run from a clone of the repository, reruns its deterministic part on the 3-D coordinates kept in `examples/expected/` and compares the results with the expected values stored there (test data and expected results: `source/testdata.rst`; the files are not part of the pip wheel).
+- **Moves and grid size.** In 3-D the agent moves one step along one axis, which gives six moves instead of eight.
+  `n` sets the number of grid points across the widest axis (30 by default in 3-D), and `radius` sets how far the grid
+  extends beyond the cells.
+- **Training.** Results vary between random seeds, so check the return curve and repeat with a few seeds.
+- **Plotting.** `scRL.plot_grids` colours the grid or the cells by any stored value; `interactive=True` gives a figure
+  you can rotate (it needs plotly).
+- **Examples.** `examples/grid3d_paul15.py` is a complete script. `examples/grid3d_walkthrough.py` runs every mode on a
+  3-D grid.
 
 ## Exact solution and lineage gate
 
-The grid environment is small and deterministic, so the best return from every grid point can also be computed exactly, without training and, once pseudotime is fixed, without a random element (`align_pseudotime` samples its start points; `seed=0` makes them reproducible). `scRL.exact_values(gres)` stores this value and the best move for the current reward. It solves a relaxed problem in which returning to a grid point does not end the walk, so with rewards that are not negative (lineage rewards, and gene rewards without `punish_keys`) its values are an upper bound on what a policy can collect under the deep environment's rules and a reference for the value landscape; a greedy policy read from it and run under the deep environment's rules reaches the lineage and then ends by revisiting a point, so its return is lower than the value. `scRL.exact_trajectories(gres)` follows the exact values from the start cluster without returning to a grid point and gives trajectories for any lineage without training, also for a lineage far from the start cluster that trained learners often fail to reach; `scRL.plot_trajectories` draws the trajectories of several lineages at once in 2-D or 3-D, `scRL.plot_mesh` draws the grid as the mesh of its moves and `scRL.plot_voxels` as cubes with an optional cut through the interior. `scRL.fate_gate` combines one value map per lineage into a ranking: the heaviest lineage of each point and how undecided it is (its weights are not shares of cells), and `scRL.plot_fates` draws them.
+The grid is small and deterministic, so the best return from every grid point can also be computed exactly, without
+training.
+
+- **`scRL.exact_values(gres)`** stores these values and the best move for the current reward. It allows a walk to
+  revisit grid points, so for non-negative rewards its values are an upper bound on what a trained agent collects.
+- **`scRL.exact_trajectories(gres)`** follows the exact values from the start cluster. It gives trajectories for any
+  lineage, including lineages far from the start that trained agents often miss.
+- **`scRL.fate_gate`** combines one value map per lineage into a ranking of the lineages at each grid point;
+  `scRL.plot_fates` draws it.
+- **Other views.** `scRL.plot_trajectories`, `scRL.plot_mesh` and `scRL.plot_voxels` draw trajectories and the grid in
+  2-D or 3-D.
+- **Reproducibility.** `align_pseudotime(..., seed=0)` makes the start points reproducible.
 
 ```python
 for end in ['0', '3']:
@@ -156,15 +155,22 @@ scRL.fate_gate(gres, ['exact_0', 'exact_3'], names=['lineage 0', 'lineage 3'])
 scRL.plot_fates(gres)
 ```
 
-`scRL.fate_probabilities(gres, {'lineage 0': '0', 'lineage 3': '3'})` gives instead, for every grid point, the share of walks on the grid that enter each lineage first within a fixed number of moves (walks that arrive at no listed lineage are counted as 'none'), drawn with `scRL.plot_fates(gres, key_add='fate')`. By default the walk has a mild bias toward later pseudotime (`forward=0.25`) and 5,000 moves to arrive. At `forward=1` a move one median pseudotime step later weighs about seven times (e squared) one the same step earlier, so walks turn back toward a neighbouring branch less often; a smaller value lets them do so more often, which can keep fate signals of neighbouring lineages at early grid points, and needs more moves.
+`scRL.fate_probabilities(gres, {'lineage 0': '0', 'lineage 3': '3'})` gives, for every grid point, the share of random
+walks on the grid that reach each lineage first; walks that reach none are counted as 'none'. Draw the result with
+`scRL.plot_fates(gres, key_add='fate')`. The walks lean slightly toward later pseudotime (`forward=0.25` by default),
+and larger values make them turn back less often.
 
-A grid built once can also read cells that were not used to build it: `scRL.place_cells(reference, embedding, query)` puts new cells in the reference embedding, and `scRL.project_cells(gres, positions, key='fate')` gives them the grid's lineage shares (or any per-grid-point value) by the kernel the grid uses for its own cells, with a flag for cells that lie outside the grid. Placement assumes the new cells come from the same kind of population as the cells the grid was built from.
+A grid can also read cells that were not used to build it. `scRL.place_cells(reference, embedding, query)` places new
+cells in the reference embedding, and `scRL.project_cells(gres, positions, key='fate')` gives them the grid's values
+and flags cells that fall outside the grid. The new cells should come from the same kind of population.
 
 ## Comparing conditions
 
-Two conditions are compared on one grid built from all cells. `scRL.project_conditions` counts each condition's cells at every grid point, `scRL.compare_abundance` tests where their numbers differ and reports, per cluster, how many grid points held by one condition only are expected from sampling alone, `scRL.compare_values(gres, test, reference, ends=[...])` labels each condition's map from its own cells, solves the lineage reward exactly on both maps and compares the values against a label-shuffling null, and `scRL.plot_conditions` draws the result.
-
-For a per-cell readout (a pseudotime, a fate probability, a signature score), `scRL.design_effect` states how strongly cells cluster within samples, and `scRL.compare_readout(values, samples, groups)` compares the two conditions with the sample as the unit (by default a t-test on the samples' mean readout, with their difference reported as `estimate`: the pooled t-test when the two conditions have the same number of samples and similar numbers of cells per sample, Welch's t-test when the numbers of samples differ or cells per sample differ threefold or more; `scale='normal'` or `scale='rank'` tests the samples' mean normal scores or mean ranks, an option for continuous readouts without tied values; relabelling and mixed-model tests on request).
+On one grid built from all cells:
+- `scRL.project_conditions` counts each condition's cells at every grid point;
+- `scRL.compare_abundance` tests where the counts differ;
+- `scRL.compare_values` compares the conditions' exact lineage values against a label-shuffling null;
+- `scRL.plot_conditions` draws the result.
 
 ```python
 scRL.project_conditions(gres, adata.obs['condition'])
@@ -172,13 +178,29 @@ scRL.compare_abundance(gres, test='knockout', reference='control')
 scRL.plot_conditions(gres)
 ```
 
-With several libraries per condition pass `samples=` (one library label per cell) to `compare_abundance` and `compare_fates`: the share of each library's cells per lineage (and, when clusters are projected, per cluster) is then compared across libraries, which is where a difference between conditions can be shown with a handful of libraries; `scRL.shares_by_sample` gives the per-library table. Cluster shares are compared across libraries on a log scale by default (`scale='log'`: log2 of the share after adding 0.5 to the cell count and 1 to the cell total, so a change in one cluster is not swamped by the large clusters); lineage labels keep the share scale (`scale='share'`), because the log scale is unsafe for a category with no cells inside a selection whose size differs between conditions. A difference in lineage shares is first of all a difference in which cell states are present: in `compare_fates`, read it with `standardise=True` (on the clusters present in every library: the difference after reweighting to one cluster composition, and the difference split into a composition part and a within-cluster part), look for shifts within cell states with `within=` and `stat='mean'`, and give `pairs=` when libraries form blocks.
+With several libraries per condition, pass `samples=` (one library label per cell) to `compare_abundance` and
+`compare_fates`; they then compare each library's share of cells per cluster or lineage across libraries, and
+`scRL.shares_by_sample` gives the per-library table. In `compare_fates`, `standardise=True`, `within=` and `pairs=`
+separate a change in which cell states are present from a shift within states.
 
-A worked example of the protocol for comparing a per-cell readout between conditions, on simulated animals, is `examples/protocol_example.py`; the documentation page [Protocol: comparing a per-cell readout between conditions](https://scrl.readthedocs.io/en/latest/readout_protocol.html) (`source/readout_protocol.rst`) walks through it.
+### A per-cell readout between conditions
+
+`scRL.compare_readout(values, samples, groups)` compares a per-cell readout, such as a pseudotime, a fate probability
+or a signature score, between two conditions with the sample (animal or donor) as the unit. By default it runs a t-test
+on the samples' mean readout and reports the difference with its 95% interval:
+- the pooled t-test when the conditions have the same number of samples and similar numbers of cells per sample;
+- Welch's t-test otherwise.
+
+`scRL.design_effect` shows how strongly cells cluster within samples, and the false-positive rate this implies for a
+test that counts cells.
+
+`examples/protocol_example.py` is a worked example on simulated animals. The documentation page
+[Protocol: comparing a per-cell readout between conditions](https://scrl.readthedocs.io/en/latest/readout_protocol.html)
+walks through it.
 
 ## Documentation
 
-Comprehensive documentation is available at [https://scrl.readthedocs.io](https://scrl.readthedocs.io/en/latest/)
+Full documentation: [https://scrl.readthedocs.io](https://scrl.readthedocs.io/en/latest/)
 
 ### Tutorials
 
@@ -196,26 +218,21 @@ Comprehensive documentation is available at [https://scrl.readthedocs.io](https:
 
 ## How It Works
 
-scRL integrates three key components:
-
-1. **Grid Embedding Generation**: Transforms single-cell data into a structured 2D grid space using boundary scanning algorithms, preserving topological relationships while enabling efficient exploration.
-
-2. **Reinforcement Learning Training**: An Actor-Critic agent learns to navigate the grid environment, guided by rewards based on gene expression patterns or lineage commitments. The critic evaluates the strength of fate decisions at each state, while the actor identifies optimal differentiation routes.
-
-3. **Functional Analysis Modules**:
-   - **Gene Module**: Explores how individual genes contribute to or determine cell fate
-   - **Lineage Module**: Analyzes commitment to specific cell lineages
-   - **Trajectory Module**: Simulates future differentiation paths using an autoencoder trained alongside the RL agent
+1. **Grid embedding**: builds a regular grid over a 2-D or 3-D embedding of the cells (4-D and 5-D are experimental).
+2. **Reinforcement learning**: an actor-critic agent learns to move on the grid, guided by rewards from gene
+   expression or lineage commitment. The critic's state values give the Decision or Contribution
+   value of each grid point, and the actor's moves give routes on the grid.
+3. **Analysis modules**:
+   - **Gene module**: how individual genes contribute to cell fate.
+   - **Lineage module**: commitment to specific lineages.
+   - **Trajectory module**: simulates differentiation paths with an autoencoder trained alongside the agent.
 
 ## Scientific Background
 
-Understanding how cells develop into different types during growth and disease is a central problem in single-cell analysis. scRL frames cell development as a sequential decision-making problem to estimate when cells begin committing to future fates.
-
-### Reported Findings
-
-- Identifies early decision points before cells show obvious lineage commitment
-- Evaluated across hematopoiesis, cancer, organogenesis, and perturbation datasets
-- Includes analyses of regulatory factors associated with fate decisions
+Understanding how cells develop into different types during growth and disease is a central problem in single-cell
+analysis. scRL frames development as a sequence of decisions to estimate when cells begin committing to future fates.
+It has been applied to haematopoiesis, cancer, organogenesis and perturbation datasets; the original study (see
+Citation) describes the framework and these applications.
 
 ## Citation
 
@@ -233,21 +250,17 @@ If you use scRL in your research, please cite:
   doi={10.3390/biology14060679}
 }
 ```
-        
-        
 
 ## Support
 
-- **Issues**: Report bugs or request features on [GitHub Issues](https://github.com/PeterPonyu/scRL/issues)
+- **Issues**: [GitHub Issues](https://github.com/PeterPonyu/scRL/issues)
 - **Documentation**: [https://scrl.readthedocs.io](https://scrl.readthedocs.io/en/latest/)
 - **Contact**: fuzeyu99@126.com
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](https://github.com/PeterPonyu/scRL/blob/main/LICENSE) file for details.
+MIT License; see the [LICENSE](https://github.com/PeterPonyu/scRL/blob/main/LICENSE) file.
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit pull requests or open issues for bugs, questions, or new features.
-
-
+Contributions are welcome: open an issue or a pull request.
