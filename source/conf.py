@@ -30,3 +30,6 @@ html_theme = 'sphinx_rtd_theme'
 html_static_path = ['_static']
 html_logo = '_static/logo.png'
 html_css_files = ['custom.css']
+
+# Render notebooks as stored; never run them during the docs build.
+nbsphinx_execute = 'never'
