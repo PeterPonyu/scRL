@@ -6,16 +6,6 @@ authors:
   - family-names: "Fu"
     given-names: "Zeyu"
     orcid: "https://orcid.org/0009-0001-8329-0108"
-  - family-names: "Chen"
-    given-names: "Chunlin"
-    orcid: "https://orcid.org/0009-0006-2328-8774"
-  - family-names: "Wang"
-    given-names: "Song"
-  - family-names: "Wang"
-    given-names: "Junping"
-  - family-names: "Chen"
-    given-names: "Shilei"
-    orcid: "https://orcid.org/0000-0003-3362-2909"
 repository-code: "https://github.com/PeterPonyu/scRL"
 license: MIT
 preferred-citation:
